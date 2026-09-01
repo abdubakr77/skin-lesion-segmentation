@@ -50,7 +50,7 @@ def masks_to_polygons_dataset(masks_path, df, y_target, stage=1):
                 continue
 
             polygon = Polygon(contour)
-
+            
             if not polygon.is_valid:
                 print(
                     f"WARNING: THIS POLYGON IS NOT VALID "
@@ -92,3 +92,76 @@ def masks_to_polygons_dataset(masks_path, df, y_target, stage=1):
 
     return pickle.loads(pickle.dumps(df))
 
+
+
+def split_dataset(df,y_target,test_size=0.2,apply_leakage_check=False):
+    grouped = (
+        df.groupby("lesion_id")[y_target]
+        .apply(list)
+        .reset_index()
+    )
+
+    mlb = MultiLabelBinarizer()
+
+    Y = mlb.fit_transform(grouped[y_target])
+
+    msss = MultilabelStratifiedShuffleSplit(
+        n_splits=1,
+        test_size=test_size,
+        random_state=42
+    )
+
+    train_idx, temp_idx = next(msss.split(grouped["lesion_id"], Y))
+
+    train_images = grouped.iloc[train_idx]
+    temp_images = grouped.iloc[temp_idx]
+
+
+    Y_temp = Y[temp_idx]
+
+    msss2 = MultilabelStratifiedShuffleSplit(
+        n_splits=1,
+        test_size=0.5,
+        random_state=42
+    )
+
+    val_idx, test_idx = next(
+        msss2.split(temp_images["lesion_id"], Y_temp)
+    )
+
+    val_images = temp_images.iloc[val_idx]
+    test_images = temp_images.iloc[test_idx]
+
+
+    train_df = df[df["lesion_id"].isin(train_images["lesion_id"])].reset_index(drop=True)
+
+    val_df = df[df["lesion_id"].isin(val_images["lesion_id"])].reset_index(drop=True)
+
+    test_df = df[df["lesion_id"].isin(test_images["lesion_id"])].reset_index(drop=True)
+
+    if apply_leakage_check:
+        print()
+
+        print("Train Patient ID :", train_images.shape[0])
+        print("Val Patient ID   :", val_images.shape[0])
+        print("Test Patient ID  :", test_images.shape[0])
+
+        print()
+
+        print("Train Images :", len(train_df))
+        print("Val Images   :", len(val_df))
+        print("Test Images  :", len(test_df))
+
+        print()
+
+        train_files = set(train_df["lesion_id"])
+        val_files = set(val_df["lesion_id"])
+        test_files = set(test_df["lesion_id"])
+
+        assert train_files.isdisjoint(val_files)
+        assert train_files.isdisjoint(test_files)
+        assert val_files.isdisjoint(test_files)
+
+        print("Perfect! No Data Leakage Found.")
+
+    return train_df, val_df , test_df
