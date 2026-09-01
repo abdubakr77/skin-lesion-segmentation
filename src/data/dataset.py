@@ -4,6 +4,10 @@ from sklearn.preprocessing import MultiLabelBinarizer
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 import cv2
 import os
+import pickle
+from shapely.geometry import Polygon
+import numpy as np
+
 
 def masks_to_polygons_dataset(masks_path, df, y_target, stage=1):
 
@@ -11,7 +15,8 @@ def masks_to_polygons_dataset(masks_path, df, y_target, stage=1):
     polygons_list = []
 
     df = df.copy()
-    df = df.reset_index(drop=True)
+
+    polygons_length = []
 
     df.drop(['age','sex','localization'],inplace=True,axis=1)
 
@@ -44,10 +49,32 @@ def masks_to_polygons_dataset(masks_path, df, y_target, stage=1):
                 print(f"N_DIM WARNING: CONTOUR DIMENSIONS ({contour.ndim}) IS NOT 2, WILL BE SKIPPED")
                 continue
 
-            normalized = [f'{x/img_w:.6f} {y/img_h:.6f}' for x, y in contour]
-            line_str = " ".join(normalized)
+            polygon = Polygon(contour)
+
+            if not polygon.is_valid:
+                print(
+                    f"WARNING: THIS POLYGON IS NOT VALID "
+                    f"IN THIS ROW INDEX: {idx}, TRYING TO FIX..."
+                )
+                polygon = polygon.buffer(0)
+
+                if polygon.is_empty:
+                    print("Failed To Fix...")
+                    continue
+
+                if polygon.geom_type != "Polygon":
+                    print(f"Failed To Fix... Result is {polygon.geom_type}")
+                    continue
+
+                print("Fixed Successfully!")
+
+            contour = list(polygon.exterior.coords)
+            
+            normalized = [coord for x, y in contour for coord in (x / img_w, y / img_h)]
+
+            polygons_length.append(len(normalized))
+            image_polygons.append(normalized)
             classes.append(cls_id)
-            image_polygons.append(line_str)
 
         all_classes_id.append(classes)
         polygons_list.append(image_polygons)
@@ -57,4 +84,11 @@ def masks_to_polygons_dataset(masks_path, df, y_target, stage=1):
     df['class_id'] = all_classes_id
     df['polygons'] = polygons_list
 
-    return df
+    print('='*35)
+
+    print(f'Max Value: {np.max(polygons_length)}')
+    print(f'Min Value: {np.min(polygons_length)}')
+    print(f'Mean: {np.mean(polygons_length)}')
+
+    return pickle.loads(pickle.dumps(df))
+
