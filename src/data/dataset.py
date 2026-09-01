@@ -9,7 +9,7 @@ from shapely.geometry import Polygon
 import numpy as np
 
 
-def masks_to_polygons_dataset(masks_path, df, y_target, stage=1):
+def masks_to_polygons_dataset(masks_path, df, y_target, stage=1,epsilon_threshold=0.001):
 
     all_classes_id = []
     polygons_list = []
@@ -67,10 +67,16 @@ def masks_to_polygons_dataset(masks_path, df, y_target, stage=1):
                     continue
 
                 print("Fixed Successfully!")
-
-            contour = list(polygon.exterior.coords)
             
-            normalized = [coord for x, y in contour for coord in (x / img_w, y / img_h)]
+            # convert to a proper cv2-compatible array before simplifying
+            contour = np.array(polygon.exterior.coords, dtype=np.float32).reshape(-1, 1, 2)
+
+            epsilon = epsilon_threshold * cv2.arcLength(contour, True)
+            simplified = cv2.approxPolyDP(contour, epsilon, True)
+
+            contour_points = simplified.reshape(-1, 2)  # shape (N, 2)
+            
+            normalized = [coord for x, y in contour_points for coord in (x / img_w, y / img_h)]
 
             polygons_length.append(len(normalized))
             image_polygons.append(normalized)
