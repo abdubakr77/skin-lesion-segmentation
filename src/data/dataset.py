@@ -5,10 +5,9 @@ from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
 import cv2
 import os
 import pickle
-from shapely.geometry import Polygon
 import numpy as np
-import matplotlib.pyplot as plt
 from src.utils.polygon_validation import _is_valid_polygon
+from tqdm import tqdm
 
 def masks_to_polygons_dataset(masks_path, df, y_target, stage=1,epsilon_threshold=0.001):
 
@@ -40,12 +39,9 @@ def masks_to_polygons_dataset(masks_path, df, y_target, stage=1,epsilon_threshol
         image_polygons = []
 
         for contour in contours:
-            polygon_result = _is_valid_polygon(contour,img_h,img_w,df['image_id'].iloc[idx])
-            if polygon_result == 'continue':
+            contour = _is_valid_polygon(contour,img_h,img_w,df['image_id'].iloc[idx])
+            if isinstance(contour,str) and contour == 'continue':
                 continue
-            
-            # convert to a proper cv2-compatible array before simplifying
-            contour = np.array(polygon_result.exterior.coords, dtype=np.float32).reshape(-1, 1, 2)
 
             epsilon = epsilon_threshold * cv2.arcLength(contour, True)
             simplified = cv2.approxPolyDP(contour, epsilon, True)
@@ -150,3 +146,73 @@ def split_dataset(df,y_target,test_size=0.2,apply_leakage_check=False):
         print("Perfect! No Data Leakage Found.")
 
     return train_df, val_df , test_df
+
+
+def clear_dataset_images(data_yaml, target='augmented', confirm_prompt=True):
+    """
+    Deletes images (and matching label files, if applicable) from the dataset.
+
+    Parameters:
+        data_yaml: dict with 'train' key pointing to the images path
+        target: 'augmented' -> only files with 'aug' in the name
+                'original'  -> only files WITHOUT 'aug' in the name
+                'all'       -> everything
+        confirm_prompt: if True, asks for y/n confirmation before deleting
+    """
+
+    main_images_path = data_yaml['train']
+
+    def matches_target(fname):
+        if target == 'augmented':
+            return 'aug' in fname
+        elif target == 'original':
+            return 'aug' not in fname
+        elif target == 'all':
+            return True
+        else:
+            raise ValueError(f"Invalid target: {target}. Use 'augmented', 'original', or 'all'.")
+
+    # ---- collect files to delete ----
+    files_to_delete = []
+
+    all_files_no_ext = [item.split('.')[0] for item in os.listdir(main_images_path)]
+    files_to_delete = [
+        os.path.join(main_images_path, f + '.png')
+        for f in all_files_no_ext if matches_target(f)
+    ]
+
+    n_files = len(files_to_delete)
+
+    if n_files == 0:
+        print(f"No '{target}' images found. Nothing to delete.")
+        return
+
+    print(f"Found {n_files} images matching target='{target}'.")
+
+    if confirm_prompt:
+        confirm = input(f"Delete all {n_files} images? - (y or n): ").lower().strip()
+        if confirm != 'y':
+            print("Cancelled. No files deleted.")
+            return
+
+    # ---- delete ----
+    deleted_count = 0
+    failed_count = 0
+
+    for fpath in tqdm(files_to_delete, desc=f'Deleting {target} images...'):
+        try:
+            os.remove(fpath)
+
+            
+            label_path = fpath.replace('images', 'labels').replace('.png', '.txt')
+            if os.path.exists(label_path):
+                os.remove(label_path)
+
+            deleted_count += 1
+        except Exception as e:
+            print(f"Failed to remove {fpath}: {e}")
+            failed_count += 1
+
+    print(f"Deleted {deleted_count} images. Failed: {failed_count}.")
+    if failed_count > 0:
+        print("Check the failed deletions above and re-run if needed.")
