@@ -47,12 +47,22 @@ def _is_valid_polygon(contour, img_h, img_w, image_id='Your Image'):
                 return 'continue'
 
         print("  - Fixed Successfully!")
-        return polygon
+
+    # convert to a proper cv2-compatible array before simplifying
+    contour = np.array(polygon.exterior.coords, dtype=np.float32).reshape(-1, 1, 2)
+
+    return contour
 
 
 def compare_polygon_to_mask(row, images_path, masks_path, area_threshold=0.05, plot=True):
 
     image_id = row['image_id']
+    polygons = row['polygons']
+
+    # skip rows with no valid polygon
+    if not polygons or len(polygons) == 0:
+        print(f"SKIPPED: {image_id} has empty polygons")
+        return None
 
     image = cv2.imread(os.path.join(images_path, f"{image_id}.jpg"))
     img_h, img_w = image.shape[:2]
@@ -61,13 +71,18 @@ def compare_polygon_to_mask(row, images_path, masks_path, area_threshold=0.05, p
     true_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
     true_mask = (true_mask > 127).astype(np.uint8)
 
-    points = np.array(row['polygons']).reshape(-1, 2)
-    points[:, 0] *= img_w
-    points[:, 1] *= img_h
-    points = points.astype(np.int32)
-
     poly_mask = np.zeros((img_h, img_w), dtype=np.uint8)
-    cv2.fillPoly(poly_mask, [points], 1)
+
+    # handle multiple contours per image (list of lists) vs a single flat list
+    is_multi = isinstance(polygons[0], list)
+    contours_list = polygons if is_multi else [polygons]
+
+    for contour in contours_list:
+        points = np.array(contour).reshape(-1, 2)
+        points[:, 0] *= img_w
+        points[:, 1] *= img_h
+        points = points.astype(np.int32)
+        cv2.fillPoly(poly_mask, [points], 1)
 
     true_area = true_mask.astype(np.int64).sum()
     poly_area = poly_mask.astype(np.int64).sum()
