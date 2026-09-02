@@ -125,3 +125,38 @@ def show_image(
 
     ax.axis("off")
     plt.show()
+
+
+
+def visualize_augmentation(images, polygons_list=None, class_labels_list=None, titles=None):
+    n = len(images)
+    fig, axes = plt.subplots(1, n, figsize=(5 * n, 5))
+
+    if n == 1:
+        axes = [axes]
+
+    for i, (ax, image) in enumerate(zip(axes, images)):
+        ax.imshow(image)
+
+        polygons = polygons_list[i] if polygons_list else None
+        class_labels = class_labels_list[i] if class_labels_list else None
+
+        if polygons and class_labels:
+            img_h, img_w = image.shape[:2]
+            for cls_id, polygon in zip(class_labels, polygons):
+                points = np.array([[x * img_w, y * img_h] for x, y in polygon])
+
+                poly_patch = patches.Polygon(points, linewidth=1.5,
+                                              edgecolor='red', facecolor='none')
+                ax.add_patch(poly_patch)
+
+                xmin, ymin = points[:, 0].min(), points[:, 1].min()
+                ax.text(xmin, ymin - 5, str(cls_id), color='red', fontsize=9,
+                        bbox=dict(facecolor='black', alpha=0.5, pad=0.5))
+
+        title = titles[i] if titles else f"Image {i}"
+        ax.set_title(title)
+        ax.axis('off')
+
+    plt.tight_layout()
+    plt.show()
