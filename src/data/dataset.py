@@ -38,9 +38,16 @@ def masks_to_polygons_dataset(masks_path, df, y_target, stage=1,epsilon_threshol
         classes = []
         image_polygons = []
 
+        min_area_ratio = 0.001
+
         for contour in contours:
             if len(contour) < 3:
                 print(f"WARNING: CONTOUR LENTGH IS {len(contour)} in {df['image_id'].iloc[idx]}, WILL BE SKIPPED") 
+                continue
+
+            # skip tiny noise contours
+            contour_area = cv2.contourArea(contour)
+            if contour_area < (min_area_ratio * img_h * img_w):
                 continue
 
             contour = contour.squeeze()
