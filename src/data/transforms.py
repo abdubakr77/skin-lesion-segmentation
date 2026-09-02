@@ -54,7 +54,6 @@ def build_transform(config):
             scale_limit=config['scale_limit'],
             rotate_limit=0,
             p=config['shift_scale_rotate_p'],
-            border_mode=cv2.BORDER_REFLECT_101
         ),
     ], keypoint_params=A.KeypointParams(format='xy', remove_invisible=False))
 
