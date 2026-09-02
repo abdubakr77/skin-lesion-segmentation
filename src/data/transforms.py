@@ -4,7 +4,9 @@ import cv2
 import os
 import numpy as np
 import albumentations as A
+from tqdm import tqdm
 from src.utils.visualization import visualize_augmentation
+from src.data.dataset import clear_dataset_images
 
 def read_image_and_label(filename_no_ext, data_yaml):
     img_path = os.path.join(data_yaml['train'], filename_no_ext + ".jpg")
@@ -100,3 +102,36 @@ def augment_and_save(image, polygons, class_labels, n_copies, base_filename,
             for cls_id, polygon in zip(new_labels, new_polygons):
                 coords_str = '  '.join(f"{x} {y}" for x, y in polygon)
                 f.write(f"{cls_id}  {coords_str}\n")
+
+
+
+def apply_smart_aug(data_yaml, aug_config, n_copies=3, apply_debug=False, clear_existing=False):
+
+    main_images_path = data_yaml['train']
+    labels_path = main_images_path.replace('images', 'labels')
+    all_files_no_ext = [f.split('.')[0] for f in os.listdir(main_images_path)]
+
+    aug_exists = any('aug' in f for f in all_files_no_ext)
+
+    if aug_exists and not apply_debug:
+        if clear_existing:
+            clear_dataset_images(data_yaml, target='augmented', confirm_prompt=False)
+        else:
+            print("Warning: Found existing augmented images. Pass clear_existing=True to clear them, "
+                  "otherwise new copies get added on top of the existing ones.")
+
+    if apply_debug:
+        rand_fname = np.random.choice(all_files_no_ext)
+        image, polygons, class_labels = read_image_and_label(rand_fname, data_yaml)
+        augment_and_save(image, polygons, class_labels, n_copies=3,
+                          base_filename=rand_fname, output_images=None, output_labels=None,
+                          aug_config=aug_config, debugging=True)
+        return
+
+    for fname in tqdm(all_files_no_ext, desc='Augmenting Images Now...'):
+        if 'aug' in fname:
+            continue
+        image, polygons, class_labels = read_image_and_label(fname, data_yaml)
+        augment_and_save(image, polygons, class_labels, n_copies=n_copies,
+                          base_filename=fname, output_images=main_images_path,
+                          output_labels=labels_path, aug_config=aug_config)
