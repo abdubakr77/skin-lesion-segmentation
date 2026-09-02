@@ -18,24 +18,25 @@ def show_image(
 ):
     import matplotlib
 
-    # Select image
     if target and len(target) == 2:
         rows = df[df[target[0]] == target[1]]
         if len(rows) == 0:
             raise ValueError(f"No data found for {target[0]} = {target[1]}")
         row = rows.iloc[np.random.randint(len(rows))]
+        lesion_id = row['lesion_id']
         image_id = row['image_id']
 
     elif target is None:
         row = df.iloc[np.random.randint(len(df))]
+        lesion_id = row['lesion_id']
         image_id = row['image_id']
 
     else:
         raise IndexError(f"Index out of range! Must be only 2. Got {len(target)}")
 
+    patient_data = df[df['lesion_id'] == lesion_id]
     data = df[df['image_id'] == image_id]
 
-    # Read raw image
     image = cv2.imread(os.path.join(images_path, f"{image_id}.jpg"))
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     img_h, img_w = image.shape[:2]
@@ -73,39 +74,44 @@ def show_image(
         color = disease_colors.get(dx, 'gray')
         label = dx
 
-        # polygons are normalized [0-1], scale to image size
-        points = np.array(row['polygons']).reshape(-1, 2)
-        points[:, 0] *= img_w
-        points[:, 1] *= img_h
-        points = points.astype(np.int32)
+        polygons = row['polygons']
+        if not polygons or len(polygons) == 0:
+            continue
 
-        xmin = points[:, 0].min()
-        ymin = points[:, 1].min()
-        xmax = points[:, 0].max()
-        ymax = points[:, 1].max()
+        # polygons is a list of contours (each contour is a flat list of coords)
+        for contour in polygons:
+            points = np.array(contour).reshape(-1, 2)
+            points[:, 0] *= img_w
+            points[:, 1] *= img_h
+            points = points.astype(np.int32)
 
-        if draw_mask:
-            mask = np.zeros(image.shape[:2], dtype=np.uint8)
-            cv2.fillPoly(mask, [points], 255)
+            xmin = points[:, 0].min()
+            ymin = points[:, 1].min()
+            xmax = points[:, 0].max()
+            ymax = points[:, 1].max()
 
-            rgb = np.array(matplotlib.colors.to_rgb(color)) * 255
-            image[mask == 255] = (
-                image[mask == 255] * (1 - mask_opacity) + rgb * mask_opacity
-            ).astype(np.uint8)
+            if draw_mask:
+                mask = np.zeros(image.shape[:2], dtype=np.uint8)
+                cv2.fillPoly(mask, [points], 255)
 
-        if draw_box:
-            rect = patches.Rectangle(
-                (xmin, ymin), xmax - xmin, ymax - ymin,
-                linewidth=2, edgecolor=color, facecolor='none'
-            )
-            ax.add_patch(rect)
+                rgb = np.array(matplotlib.colors.to_rgb(color)) * 255
+                image[mask == 255] = (
+                    image[mask == 255] * (1 - mask_opacity) + rgb * mask_opacity
+                ).astype(np.uint8)
 
-        if draw_mask or draw_box:
-            ax.text(
-                xmin, max(ymin - 5, 10), label,
-                color=color, fontsize=9,
-                bbox=dict(facecolor='black', alpha=0.5, pad=0.5)
-            )
+            if draw_box:
+                rect = patches.Rectangle(
+                    (xmin, ymin), xmax - xmin, ymax - ymin,
+                    linewidth=2, edgecolor=color, facecolor='none'
+                )
+                ax.add_patch(rect)
+
+            if draw_mask or draw_box:
+                ax.text(
+                    xmin, max(ymin - 5, 10), label,
+                    color=color, fontsize=9,
+                    bbox=dict(facecolor='black', alpha=0.5, pad=0.5)
+                )
 
     ax.imshow(image)
 
@@ -115,7 +121,7 @@ def show_image(
     ]
     ax.legend(handles=legend_elements, loc='upper right')
 
-    ax.set_title(f"{image_id} | dx_type: {row['dx_type']} | Images for this ID: {len(data)}")
+    ax.set_title(f"{image_id} | dx_type: {row['dx_type']} | Images for this ID: {len(patient_data)}")
 
     ax.axis("off")
     plt.show()
