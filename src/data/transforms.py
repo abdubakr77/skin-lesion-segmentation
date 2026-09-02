@@ -36,7 +36,7 @@ def build_transform(config):
     return A.Compose([
         A.HorizontalFlip(p=config['hflip_p']),
         A.VerticalFlip(p=config['vflip_p']),
-        A.Rotate(limit=config['rotate_limit'], p=config['rotate_p'], border_mode=cv2.BORDER_REFLECT_101),
+        A.Rotate(limit=config['rotate_limit'], p=config['rotate_p']),
         A.RandomBrightnessContrast(
             brightness_limit=config['brightness_limit'],
             contrast_limit=config['contrast_limit'],
