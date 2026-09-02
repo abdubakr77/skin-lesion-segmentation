@@ -7,7 +7,7 @@ import os
 import pickle
 from shapely.geometry import Polygon
 import numpy as np
-
+import matplotlib.pyplot as plt
 
 def masks_to_polygons_dataset(masks_path, df, y_target, stage=1,epsilon_threshold=0.001):
 
@@ -59,14 +59,19 @@ def masks_to_polygons_dataset(masks_path, df, y_target, stage=1,epsilon_threshol
                 polygon = polygon.buffer(0)
 
                 if polygon.is_empty:
-                    print("Failed To Fix...")
+                    print("  - Failed To Fix...")
                     continue
 
                 if polygon.geom_type != "Polygon":
-                    print(f"Failed To Fix... Result is {polygon.geom_type}")
-                    continue
+                    if polygon.geom_type == "MultiPolygon":
+                        # take the largest sub-polygon instead of dropping it
+                        polygon = max(polygon.geoms, key=lambda p: p.area)
+                        print(f"Recovered largest part from MultiPolygon")
+                    else:
+                        print(f"  - Failed To Fix... Result is {polygon.geom_type}")
+                        continue
 
-                print("Fixed Successfully!")
+                print("  - Fixed Successfully!")
             
             # convert to a proper cv2-compatible array before simplifying
             contour = np.array(polygon.exterior.coords, dtype=np.float32).reshape(-1, 1, 2)
@@ -95,6 +100,9 @@ def masks_to_polygons_dataset(masks_path, df, y_target, stage=1,epsilon_threshol
     print(f'Max Value: {np.max(polygons_length)}')
     print(f'Min Value: {np.min(polygons_length)}')
     print(f'Mean: {np.mean(polygons_length)}')
+
+    empty_count = sum(1 for p in polygons_list if len(p) == 0)
+    print(f'Empty polygons: {empty_count} / {len(df)}')
 
     return pickle.loads(pickle.dumps(df))
 
