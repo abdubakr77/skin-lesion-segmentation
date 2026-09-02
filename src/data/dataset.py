@@ -8,6 +8,7 @@ import pickle
 from shapely.geometry import Polygon
 import numpy as np
 import matplotlib.pyplot as plt
+from src.utils.polygon_validation import _is_valid_polygon
 
 def masks_to_polygons_dataset(masks_path, df, y_target, stage=1,epsilon_threshold=0.001):
 
@@ -38,50 +39,13 @@ def masks_to_polygons_dataset(masks_path, df, y_target, stage=1,epsilon_threshol
         classes = []
         image_polygons = []
 
-        min_area_ratio = 0.001
-
         for contour in contours:
-            if len(contour) < 3:
-                print(f"WARNING: CONTOUR LENTGH IS {len(contour)} in {df['image_id'].iloc[idx]}, WILL BE SKIPPED") 
+            polygon_result = _is_valid_polygon(contour,img_h,img_w,df['image_id'].iloc[idx])
+            if polygon_result == 'continue':
                 continue
-
-            # skip tiny noise contours
-            contour_area = cv2.contourArea(contour)
-            if contour_area < (min_area_ratio * img_h * img_w):
-                continue
-
-            contour = contour.squeeze()
-
-            if contour.ndim != 2:
-                print(f"N_DIM WARNING: CONTOUR DIMENSIONS ({contour.ndim}) IS NOT 2, WILL BE SKIPPED")
-                continue
-
-            polygon = Polygon(contour)
-            
-            if not polygon.is_valid:
-                print(
-                    f"WARNING: THIS POLYGON IS NOT VALID "
-                    f"IN THIS ROW INDEX: {idx}, TRYING TO FIX..."
-                )
-                polygon = polygon.buffer(0)
-
-                if polygon.is_empty:
-                    print("  - Failed To Fix...")
-                    continue
-
-                if polygon.geom_type != "Polygon":
-                    if polygon.geom_type == "MultiPolygon":
-                        # take the largest sub-polygon instead of dropping it
-                        polygon = max(polygon.geoms, key=lambda p: p.area)
-                        print(f"Recovered largest part from MultiPolygon")
-                    else:
-                        print(f"  - Failed To Fix... Result is {polygon.geom_type}")
-                        continue
-
-                print("  - Fixed Successfully!")
             
             # convert to a proper cv2-compatible array before simplifying
-            contour = np.array(polygon.exterior.coords, dtype=np.float32).reshape(-1, 1, 2)
+            contour = np.array(polygon_result.exterior.coords, dtype=np.float32).reshape(-1, 1, 2)
 
             epsilon = epsilon_threshold * cv2.arcLength(contour, True)
             simplified = cv2.approxPolyDP(contour, epsilon, True)
