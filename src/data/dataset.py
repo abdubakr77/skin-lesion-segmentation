@@ -20,7 +20,7 @@ def masks_to_polygons_dataset(masks_path, df, y_target, stage=1,epsilon_threshol
 
     df.drop(['age','sex','localization'],inplace=True,axis=1)
 
-    cls2idx = {x:y for y,x in enumerate(df[y_target].unique())}
+    cls2idx = {x:y for y,x in enumerate(sorted(df[y_target].unique()))}
 
     for idx in range(len(df)):
         
@@ -177,7 +177,7 @@ def clear_dataset_images(data_yaml, target='augmented', confirm_prompt=True):
 
     all_files_no_ext = [item.split('.')[0] for item in os.listdir(main_images_path)]
     files_to_delete = [
-        os.path.join(main_images_path, f + '.png')
+        os.path.join(main_images_path, f + '.jpg')
         for f in all_files_no_ext if matches_target(f)
     ]
 
@@ -204,7 +204,7 @@ def clear_dataset_images(data_yaml, target='augmented', confirm_prompt=True):
             os.remove(fpath)
 
             
-            label_path = fpath.replace('images', 'labels').replace('.png', '.txt')
+            label_path = fpath.replace('images', 'labels').replace('.jpg', '.txt')
             if os.path.exists(label_path):
                 os.remove(label_path)
 
