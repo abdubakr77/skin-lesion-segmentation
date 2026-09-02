@@ -1,7 +1,4 @@
-data/**/images/*
-data/**/masks/*
-!data/**/images/.gitkeep
-!data/**/masks/.gitkeep
+data
 
 outputs/checkpoints/*
 outputs/predictions/*
