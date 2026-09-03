@@ -29,6 +29,19 @@ def read_image_and_label(filename_no_ext, data_yaml):
 
     return image, polygons, class_labels
 
+def add_hair_noise(image, **kwargs):
+    img = image.copy()
+    h, w = img.shape[:2]
+    n_hairs = np.random.randint(1, 4)
+
+    for _ in range(n_hairs):
+        x1, y1 = np.random.randint(0, w), np.random.randint(0, h)
+        x2, y2 = x1 + np.random.randint(-100, 100), y1 + np.random.randint(-100, 100)
+        color = tuple(np.random.randint(10, 60, 3).tolist())
+        thickness = np.random.randint(1, 2)
+        cv2.line(img, (x1, y1), (x2, y2), color, thickness)
+
+    return img
 
 def build_transform(config):
     return A.Compose([
@@ -53,6 +66,7 @@ def build_transform(config):
             rotate_limit=0,
             p=config['shift_scale_rotate_p'],
         ),
+        A.Lambda(image=add_hair_noise, p=config['hair_noise_p']),
     ], keypoint_params=A.KeypointParams(format='xy', remove_invisible=False))
 
 
