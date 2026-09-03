@@ -5,6 +5,12 @@ import albumentations as A
 from tqdm import tqdm
 from src.utils.visualization import visualize_augmentation
 from src.data.dataset import clear_dataset_images
+from scipy.interpolate import splprep, splev
+from skimage.morphology import skeletonize
+
+
+HAIR_COLORS = [(20, 15, 10), (40, 25, 15), (60, 50, 45), (10, 10, 10)]
+
 
 def read_image_and_label(filename_no_ext, data_yaml):
     img_path = os.path.join(data_yaml['train'], filename_no_ext + ".jpg")
@@ -29,21 +35,88 @@ def read_image_and_label(filename_no_ext, data_yaml):
 
     return image, polygons, class_labels
 
-def add_hair_noise(image, **kwargs):
-    img = image.copy()
-    h, w = img.shape[:2]
-    n_hairs = np.random.randint(1, 4)
 
-    for _ in range(n_hairs):
-        x1, y1 = np.random.randint(0, w), np.random.randint(0, h)
-        x2, y2 = x1 + np.random.randint(-100, 100), y1 + np.random.randint(-100, 100)
-        color = tuple(np.random.randint(10, 60, 3).tolist())
-        thickness = np.random.randint(1, 2)
-        cv2.line(img, (x1, y1), (x2, y2), color, thickness)
+def extract_hair_curves(hair_images_dir, n_points=150):
+    curves = []
 
-    return img
+    for fname in os.listdir(hair_images_dir):
+        img = cv2.imread(os.path.join(hair_images_dir, fname), cv2.IMREAD_GRAYSCALE)
+        _, mask = cv2.threshold(img, 20, 255, cv2.THRESH_BINARY)
+        skeleton = skeletonize(mask > 0)
+
+        ys, xs = np.where(skeleton)
+        if len(xs) < 10:
+            continue
+
+        points = np.stack([xs, ys], axis=1).astype(np.float32)
+        ordered = _order_skeleton_points(points)
+
+        tck, _ = splprep([ordered[:, 0], ordered[:, 1]], s=len(ordered) * 0.5)
+        u_new = np.linspace(0, 1, n_points)
+        x_new, y_new = splev(u_new, tck)
+        curve = np.stack([x_new, y_new], axis=1)
+
+        curve -= curve.min(axis=0)
+        curve /= curve.max()
+        curves.append(curve)
+
+    return curves
+
+
+def _order_skeleton_points(points):
+    remaining = points.copy()
+    start_idx = np.argmin(remaining[:, 0] + remaining[:, 1])
+    ordered = [remaining[start_idx]]
+    remaining = np.delete(remaining, start_idx, axis=0)
+
+    while len(remaining) > 0:
+        last = ordered[-1]
+        dists = np.linalg.norm(remaining - last, axis=1)
+        nearest_idx = np.argmin(dists)
+        ordered.append(remaining[nearest_idx])
+        remaining = np.delete(remaining, nearest_idx, axis=0)
+
+    return np.array(ordered)
+
+
+def add_hair_overlay(image, hair_curves, p=0.3, n_hairs=(3, 6)):
+    if np.random.rand() > p or len(hair_curves) == 0:
+        return image
+
+    image = image.copy()
+    img_h, img_w = image.shape[:2]
+    overlay = image.copy()
+
+    n = np.random.randint(n_hairs[0], n_hairs[1] + 1)
+
+    for _ in range(n):
+        curve = hair_curves[np.random.randint(len(hair_curves))].copy()
+
+        length = np.random.uniform(0.3, 0.7) * max(img_w, img_h)
+        angle = np.random.uniform(0, 2 * np.pi)
+        scale_x = length
+        scale_y = length * np.random.uniform(0.3, 1.0)
+
+        pts = curve * [scale_x, scale_y]
+        rot = np.array([[np.cos(angle), -np.sin(angle)],
+                         [np.sin(angle),  np.cos(angle)]])
+        pts = pts @ rot.T
+
+        offset_x = np.random.uniform(0, img_w)
+        offset_y = np.random.uniform(0, img_h)
+        pts = (pts + [offset_x, offset_y]).astype(np.int32)
+
+        color = HAIR_COLORS[np.random.randint(len(HAIR_COLORS))]
+        thickness = np.random.choice([1, 1, 2])
+
+        cv2.polylines(overlay, [pts], isClosed=False, color=color,
+                       thickness=thickness, lineType=cv2.LINE_AA)
+
+    alpha = np.random.uniform(0.5, 0.85)
+    return cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
 
 def build_transform(config):
+    hair_curves = extract_hair_curves(config['hair_overlay_path'])
     return A.Compose([
         A.HorizontalFlip(p=config['hflip_p']),
         A.VerticalFlip(p=config['vflip_p']),
@@ -66,7 +139,8 @@ def build_transform(config):
             rotate_limit=0,
             p=config['shift_scale_rotate_p'],
         ),
-        A.Lambda(image=add_hair_noise, p=config['hair_noise_p']),
+        
+        A.Lambda(image=lambda img, **kwargs: add_hair_overlay(img, hair_curves=hair_curves, p=config['hair_p']), p=1.0),
     ], keypoint_params=A.KeypointParams(format='xy', remove_invisible=False))
 
 
