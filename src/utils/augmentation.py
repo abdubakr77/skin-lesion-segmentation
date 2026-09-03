@@ -132,3 +132,43 @@ def apply_smart_aug(data_yaml, aug_config, n_copies=3, apply_debug=False, clear_
         augment_and_save(image, polygons, class_labels, n_copies=n_copies,
                           base_filename=fname, output_images=main_images_path,
                           output_labels=labels_path, aug_config=aug_config)
+
+
+def suggest_n_copies(data_yaml, class_names=None):
+    """
+    Counts how many label instances each class has across all label files,
+    and suggests how many augmented copies per image would bring every class
+    close to the largest class count.
+
+    Args:
+        data_yaml: dict with a 'train' key pointing to the images folder
+        class_names: optional dict/list mapping class_id -> class name, for readable output
+
+    Returns:
+        counts: dict of class_id -> current instance count
+        suggestions: dict of class_id -> suggested n_copies
+    """
+    labels_path = data_yaml['train'].replace('images', 'labels')
+    all_files_no_ext = [f.split('.')[0] for f in os.listdir(data_yaml['train'])]
+
+    counts = {}
+    for fname in all_files_no_ext:
+        label_path = os.path.join(labels_path, fname + '.txt')
+        if not os.path.exists(label_path):
+            continue
+        with open(label_path, 'r') as f:
+            for line in f.readlines():
+                cls_id = int(float(line.split()[0]))
+                counts[cls_id] = counts.get(cls_id, 0) + 1
+
+    max_count = max(counts.values())
+
+    suggestions = {}
+    for cls_id, count in counts.items():
+        suggestions[cls_id] = max(0, round(max_count / count) - 1) if count else 0
+
+    if class_names:
+        counts = {class_names[k]: v for k, v in counts.items()}
+        suggestions = {class_names[k]: v for k, v in suggestions.items()}
+
+    return counts, suggestions
