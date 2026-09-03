@@ -102,7 +102,7 @@ def augment_and_save(image, polygons, class_labels, n_copies, base_filename,
 
 
 
-def apply_smart_aug(data_yaml, aug_config, n_copies=3, apply_debug=False, clear_existing=False):
+def apply_smart_aug(data_yaml, aug_config, n_copies_per_class=None, apply_debug=False, clear_existing=False):
 
     main_images_path = data_yaml['train']
     labels_path = main_images_path.replace('images', 'labels')
@@ -125,11 +125,21 @@ def apply_smart_aug(data_yaml, aug_config, n_copies=3, apply_debug=False, clear_
                           aug_config=aug_config, debugging=True)
         return
 
+    if n_copies_per_class is None:
+        raise ValueError("n_copies_per_class is required. Use suggest_n_copies(data_yaml) to get a starting point.")
+
     for fname in tqdm(all_files_no_ext, desc='Augmenting Images Now...'):
         if 'aug' in fname:
             continue
+
         image, polygons, class_labels = read_image_and_label(fname, data_yaml)
-        augment_and_save(image, polygons, class_labels, n_copies=n_copies,
+
+        # decide n_copies for this image based on the rarest class it contains
+        n = max((n_copies_per_class.get(cls_id, 0) for cls_id in class_labels), default=0)
+        if n <= 0:
+            continue
+
+        augment_and_save(image, polygons, class_labels, n_copies=n,
                           base_filename=fname, output_images=main_images_path,
                           output_labels=labels_path, aug_config=aug_config)
 
