@@ -1,14 +1,15 @@
-data/processed
+data/processed/stage-1/train
+data/processed/stage-1/val
+data/processed/stage-1/test
+
+data/processed/stage-2/train
+data/processed/stage-2/val
+data/processed/stage-2/test
+
 data/raw
 
 notebooks/*.pt
 
-outputs/checkpoints/*
-outputs/predictions/*
-outputs/logs/*
-!outputs/checkpoints/.gitkeep
-!outputs/predictions/.gitkeep
-!outputs/logs/.gitkeep
 
 __pycache__/
 *.py[cod]
