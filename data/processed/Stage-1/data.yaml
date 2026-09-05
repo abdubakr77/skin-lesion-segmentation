@@ -1,0 +1,7 @@
+train: C:/Users/ibrah.HIMA/OneDrive/Desktop/Full AI/Projects/GitHub - Kaggle Projects/skin-lesion-segmentation/data/processed/Stage-1/train/images
+val: C:/Users/ibrah.HIMA/OneDrive/Desktop/Full AI/Projects/GitHub - Kaggle Projects/skin-lesion-segmentation/data/processed/Stage-1/val/images
+test: C:/Users/ibrah.HIMA/OneDrive/Desktop/Full AI/Projects/GitHub - Kaggle Projects/skin-lesion-segmentation/data/processed/Stage-1/test/images
+
+nc: 2
+
+names: ['Not Mel','Mel']
