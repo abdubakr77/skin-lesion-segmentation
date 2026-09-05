@@ -5,8 +5,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
+def get_background_class_id(names):
+    for cls_id, cls_name in names.items():
+        if cls_name.lower() == 'background':
+            return cls_id
+    raise ValueError("No class named 'background' found in model.names")
+
 def predict(yolo_model, images_path, specific_image_name=None,
-                  save_dir: str = None, remove_background=False, background_class_id=2):
+                  save_dir: str = None, remove_background=False):
 
     if not os.path.exists(images_path):
         raise FileNotFoundError('Images Dir not existed! Please Check the path if is it correct')
@@ -28,6 +34,8 @@ def predict(yolo_model, images_path, specific_image_name=None,
     if semantic_mask is None:
         print(f"No semantic mask returned for this image: {rand_image_name}.")
         return
+
+    background_class_id = get_background_class_id(names)
 
     mask_data = semantic_mask.data.cpu().numpy()
     present_classes = [c for c in np.unique(mask_data) if c != background_class_id]
