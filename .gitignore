@@ -1,6 +1,8 @@
 data/processed
 data/raw
 
+notebooks/*.pt
+
 outputs/checkpoints/*
 outputs/predictions/*
 outputs/logs/*
