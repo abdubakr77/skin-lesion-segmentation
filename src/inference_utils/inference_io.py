@@ -96,3 +96,30 @@ def _labels_txt_to_mask(label_path, img_h, img_w):
 
     return mask
 
+
+def load_ground_truth(image_id, img_h, img_w, masks_path=None, labels_path=None):
+    """Loads ground truth from whichever source is available.
+
+    - masks_path: raw ISIC-style binary *_segmentation.png (0/1, no disease
+      breakdown - just "is this pixel part of the lesion or not")
+    - labels_path: YOLO-seg .txt files (real class ids per polygon) -
+      rasterized to a per-pixel class-id mask, background = -1
+
+    Returns (mask, kind) where kind is 'binary', 'multiclass', or None if no
+    ground truth was found for this image.
+    """
+    if masks_path is not None:
+        mask_file = os.path.join(masks_path, f"{image_id}_segmentation.png")
+        if os.path.exists(mask_file):
+            mask = cv2.imread(mask_file, cv2.IMREAD_GRAYSCALE)
+            return (mask > 127).astype(np.uint8), 'binary'
+        return None, None
+
+    if labels_path is not None:
+        label_file = os.path.join(labels_path, f"{image_id}.txt")
+        if os.path.exists(label_file):
+            return _labels_txt_to_mask(label_file, img_h, img_w), 'multiclass'
+        return None, None
+
+    return None, None
+
