@@ -1,0 +1,4 @@
+ISIC_0024945: lesion area unusually LARGE (94.79% of image)
+ISIC_0026929: lesion area unusually LARGE (86.21% of image)
+ISIC_0029900: lesion area unusually LARGE (94.43% of image)
+ISIC_0031112: lesion area unusually LARGE (86.24% of image)
