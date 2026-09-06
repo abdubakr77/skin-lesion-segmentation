@@ -139,3 +139,25 @@ def check_mask_size(binary_mask, image_id, min_ratio=0.005, max_ratio=0.85):
 
     return warnings
 
+
+def crop_from_mask(image, binary_mask, remove_background=False, padding=0):
+    """Crops the image to the bounding box of a binary mask. Optionally
+    zeroes out everything outside the mask (background removal). Returns
+    None if the mask is empty.
+    """
+    ys, xs = np.where(binary_mask)
+    if len(xs) == 0:
+        return None
+
+    img_h, img_w = image.shape[:2]
+    x1 = max(int(xs.min()) - padding, 0)
+    y1 = max(int(ys.min()) - padding, 0)
+    x2 = min(int(xs.max()) + padding, img_w - 1)
+    y2 = min(int(ys.max()) + padding, img_h - 1)
+
+    source = image
+    if remove_background:
+        mask_3ch = np.stack([binary_mask] * 3, axis=-1)
+        source = image * mask_3ch
+
+    return source[y1:y2 + 1, x1:x2 + 1]
