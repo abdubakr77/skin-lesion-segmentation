@@ -233,3 +233,39 @@ def run_inference_pipeline(stage1_model, stage2_model, images_path,
                 f.write('\n'.join(warnings_list))
 
     return results_df, warnings_list
+
+
+def compute_pipeline_statistics(results_df):
+    """Summarizes detection rates, mask overlap quality, and classification
+    accuracy (only computed where ground-truth class ids were available).
+    Run this on a test-set results_df to get real evaluation numbers.
+    """
+    total = len(results_df)
+    stage1_detected = results_df['stage1_detected'].sum()
+
+    reached_stage2 = results_df['stage2_detected'].notna().sum()
+    stage2_detected = (results_df['stage2_detected'] == True).sum()
+
+    stats = {
+        'total_images': total,
+        'stage1_detection_rate': stage1_detected / total if total else 0,
+        'stage1_no_detection_rate': 1 - (stage1_detected / total) if total else 0,
+        'images_reaching_stage2': int(reached_stage2),
+        'stage2_detection_rate': (stage2_detected / reached_stage2) if reached_stage2 else None,
+        'stage2_no_detection_rate': (1 - stage2_detected / reached_stage2) if reached_stage2 else None,
+    }
+
+    overlap_rows = results_df.dropna(subset=['iou', 'dice'])
+    if len(overlap_rows) > 0:
+        stats['n_images_with_ground_truth'] = len(overlap_rows)
+        stats['mean_iou'] = overlap_rows['iou'].mean()
+        stats['mean_dice'] = overlap_rows['dice'].mean()
+
+    labeled_rows = results_df.dropna(subset=['true_class_name'])
+    if len(labeled_rows) > 0:
+        final_pred = labeled_rows['stage2_prediction'].fillna(labeled_rows['stage1_prediction'])
+        accuracy = (final_pred.astype(str) == labeled_rows['true_class_name'].astype(str)).mean()
+        stats['classification_accuracy'] = accuracy
+        stats['confusion_counts'] = pd.crosstab(labeled_rows['true_class_name'], final_pred)
+
+    return stats
