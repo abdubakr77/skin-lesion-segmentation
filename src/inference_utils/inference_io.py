@@ -35,3 +35,41 @@ def get_background_class_id(names):
             return cls_id
     raise ValueError("No class named 'background' found in model.names")
 
+
+def validate_labels_folder(labels_path, image_ids=None, sample_size=None):
+    """Structural sanity check on YOLO-seg label .txt files: correct value
+    count, complete (x, y) pairs, coordinates within [0, 1]. This is separate
+    from the shapely-based contour repair done when the labels were first
+    generated - this just catches file-level mistakes before inference runs.
+
+    Returns a list of warning strings (empty if everything looks fine).
+    """
+    warnings = []
+    files = image_ids if image_ids else [f.split('.')[0] for f in os.listdir(labels_path)]
+    if sample_size:
+        files = files[:sample_size]
+
+    for image_id in files:
+        label_file = os.path.join(labels_path, image_id + '.txt')
+        if not os.path.exists(label_file):
+            continue
+
+        with open(label_file, 'r') as f:
+            for line_num, line in enumerate(f.readlines()):
+                values = line.split()
+
+                if len(values) < 7:  # class_id + at least 3 points (6 coords)
+                    warnings.append(f"{image_id} line {line_num}: too few values ({len(values)})")
+                    continue
+
+                coords = values[1:]
+                if len(coords) % 2 != 0:
+                    warnings.append(f"{image_id} line {line_num}: odd number of coordinates")
+                    continue
+
+                coord_values = list(map(float, coords))
+                if any(c < 0 or c > 1 for c in coord_values):
+                    warnings.append(f"{image_id} line {line_num}: coordinates outside [0, 1] range")
+
+    return warnings
+
