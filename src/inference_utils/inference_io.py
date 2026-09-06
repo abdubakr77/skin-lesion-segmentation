@@ -123,3 +123,19 @@ def load_ground_truth(image_id, img_h, img_w, masks_path=None, labels_path=None)
 
     return None, None
 
+
+def check_mask_size(binary_mask, image_id, min_ratio=0.005, max_ratio=0.85):
+    """Flags a lesion mask whose area looks unusually small or large relative
+    to the whole image. Returns a list of warning strings (possibly empty).
+    """
+    warnings = []
+    img_h, img_w = binary_mask.shape[:2]
+    area_ratio = binary_mask.sum() / (img_h * img_w)
+
+    if area_ratio < min_ratio:
+        warnings.append(f"{image_id}: lesion area unusually SMALL ({area_ratio:.2%} of image)")
+    elif area_ratio > max_ratio:
+        warnings.append(f"{image_id}: lesion area unusually LARGE ({area_ratio:.2%} of image)")
+
+    return warnings
+
