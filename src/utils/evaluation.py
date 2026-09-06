@@ -47,3 +47,26 @@ def plot_train_val_curves(df, metrics, title=''):
     plt.tight_layout()
     plt.show()
 
+
+def plot_metric_comparison_bar(results_dict, metric_col):
+    """Bar chart comparing the best value of a metric across multiple runs.
+
+    Args:
+        results_dict: dict of run_name -> DataFrame (from load_results())
+        metric_col: column name to compare, e.g. 'metrics/mIoU'
+    """
+    names = list(results_dict.keys())
+    best_values = [df[metric_col].max() for df in results_dict.values()]
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    bars = ax.bar(names, best_values, color=['#4C72B0', '#DD8452'])
+
+    for bar, value in zip(bars, best_values):
+        ax.text(bar.get_x() + bar.get_width() / 2, value, f'{value:.3f}',
+                ha='center', va='bottom')
+
+    ax.set_ylabel(metric_col)
+    ax.set_title(f'Best {metric_col} Comparison')
+    plt.tight_layout()
+    plt.show()
+
