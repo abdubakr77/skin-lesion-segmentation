@@ -26,3 +26,12 @@ def check_paths(images_path, masks_path=None, labels_path=None,
 
     if stage2_weights is not None and not os.path.exists(stage2_weights):
         raise FileNotFoundError(f"Stage 2 weights not found: {stage2_weights}")
+
+
+def get_background_class_id(names):
+    """Finds the class id whose name is 'background' inside a model.names dict."""
+    for cls_id, cls_name in names.items():
+        if cls_name.lower() == 'background':
+            return cls_id
+    raise ValueError("No class named 'background' found in model.names")
+

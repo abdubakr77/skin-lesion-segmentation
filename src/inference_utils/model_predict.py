@@ -5,12 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 from matplotlib import patches
-
-def get_background_class_id(names):
-    for cls_id, cls_name in names.items():
-        if cls_name.lower() == 'background':
-            return cls_id
-    raise ValueError("No class named 'background' found in model.names")
+from src.inference_utils.inference_io import get_background_class_id
 
 def predict(yolo_model, images_path, specific_image_name=None,
             save_dir: str = None, remove_background=False):
