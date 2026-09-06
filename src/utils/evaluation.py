@@ -70,3 +70,15 @@ def plot_metric_comparison_bar(results_dict, metric_col):
     plt.tight_layout()
     plt.show()
 
+
+def show_saved_image(image_path, title=''):
+    """Displays a single saved image file (e.g. confusion_matrix.png, results.png)."""
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(f"No image found at {image_path}")
+
+    img = mpimg.imread(image_path)
+    plt.figure(figsize=(10, 8))
+    plt.imshow(img)
+    plt.title(title)
+    plt.axis('off')
+    plt.show()
