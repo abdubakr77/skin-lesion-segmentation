@@ -59,14 +59,14 @@ def _setup_output_dirs(save_dir):
     return dirs
 
 
-def _run_semantic_model(model, image, background_class_id):
+def _run_semantic_model(model, image, background_class_id, verbose=False):
     """Runs one semantic segmentation model on an image.
 
     Returns (class_masks, names): class_masks is {cls_id: binary_mask} for
     every non-background class found (empty dict if only background), names
     is the model's class-id-to-name dict.
     """
-    output = model.predict(image)[0]
+    output = model.predict(image, verbose=verbose)[0]
     names = output.names
 
     semantic_mask = output.semantic_mask
@@ -148,7 +148,7 @@ def run_inference_pipeline(stage1_model, stage2_model, images_path,
                     row['true_class_name'] = gt_class_names[top_gt_cls] if gt_class_names else str(top_gt_cls)
 
         # ---- Stage 1 ----
-        stage1_masks, stage1_names = _run_semantic_model(stage1_model, image, stage1_bg_id)
+        stage1_masks, stage1_names = _run_semantic_model(stage1_model, image, stage1_bg_id, verbose=visualize)
 
         if len(stage1_masks) == 0:
             if save_dir:
