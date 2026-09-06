@@ -57,3 +57,25 @@ def _setup_output_dirs(save_dir):
     for d in dirs.values():
         os.makedirs(d, exist_ok=True)
     return dirs
+
+
+def _run_semantic_model(model, image, background_class_id):
+    """Runs one semantic segmentation model on an image.
+
+    Returns (class_masks, names): class_masks is {cls_id: binary_mask} for
+    every non-background class found (empty dict if only background), names
+    is the model's class-id-to-name dict.
+    """
+    output = model.predict(image)[0]
+    names = output.names
+
+    semantic_mask = output.semantic_mask
+    if semantic_mask is None:
+        return {}, names
+
+    mask_data = semantic_mask.data.cpu().numpy()
+    present_classes = [c for c in np.unique(mask_data) if c != background_class_id]
+
+    class_masks = {int(c): (mask_data == c).astype('uint8') for c in present_classes}
+    return class_masks, names
+
