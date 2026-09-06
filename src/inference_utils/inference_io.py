@@ -161,3 +161,17 @@ def crop_from_mask(image, binary_mask, remove_background=False, padding=0):
         source = image * mask_3ch
 
     return source[y1:y2 + 1, x1:x2 + 1]
+
+
+def compute_overlap_metrics(pred_mask, true_mask):
+    """IoU and Dice between two binary masks."""
+    pred = pred_mask.astype(bool)
+    true = true_mask.astype(bool)
+
+    intersection = np.logical_and(pred, true).sum()
+    union = np.logical_or(pred, true).sum()
+
+    iou = intersection / union if union > 0 else 0.0
+    dice = (2 * intersection) / (pred.sum() + true.sum()) if (pred.sum() + true.sum()) > 0 else 0.0
+
+    return {'iou': float(iou), 'dice': float(dice)}
