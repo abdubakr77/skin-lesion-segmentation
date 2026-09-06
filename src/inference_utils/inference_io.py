@@ -73,3 +73,26 @@ def validate_labels_folder(labels_path, image_ids=None, sample_size=None):
 
     return warnings
 
+
+def _labels_txt_to_mask(label_path, img_h, img_w):
+    """Rasterizes a YOLO-seg label file (class_id x1 y1 x2 y2 ...) into a
+    class-id mask of shape (img_h, img_w). Background pixels are -1 so they
+    never collide with a real class id (which can legitimately be 0).
+    """
+    mask = np.full((img_h, img_w), fill_value=-1, dtype=np.int16)
+
+    with open(label_path, 'r') as f:
+        for line in f.readlines():
+            values = line.split()
+            cls_id = int(float(values[0]))
+            coords = list(map(float, values[1:]))
+
+            points = np.array(coords).reshape(-1, 2)
+            points[:, 0] *= img_w
+            points[:, 1] *= img_h
+            points = points.astype(np.int32)
+
+            cv2.fillPoly(mask, [points], int(cls_id))
+
+    return mask
+
