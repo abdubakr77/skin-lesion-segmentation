@@ -1,0 +1,2 @@
+image_id,stage1_detected,stage1_prediction,stage2_detected,stage2_prediction,true_class_name,iou,dice
+ISIC_0032318,True,Mel,,,bkl,0.380902921047764,0.5516722649246811
