@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import cv2
 import os
+from sklearn.metrics import confusion_matrix, classification_report
+import seaborn as sns
 
 def show_image(
     df,
@@ -160,3 +162,55 @@ def visualize_augmentation(images, polygons_list=None, class_labels_list=None, t
 
     plt.tight_layout()
     plt.show()
+
+
+
+def show_curves(model_history,save_dir=os.getcwd()):
+    """
+    Plot Loss and Accuracy curves for train and validation splits.
+
+    Parameters
+    ----------
+    model_history : list of dicts - keys: train_loss, valid_loss, train_acc, valid_acc
+    """
+    train_loss = [x["train_loss"] for x in model_history]
+    valid_loss = [x["valid_loss"] for x in model_history]
+    train_acc  = [x["train_acc" ] for x in model_history]
+    valid_acc  = [x["valid_acc" ] for x in model_history]
+
+    _, ax = plt.subplots(1, 2, figsize=(14, 5))
+
+    ax[0].plot(train_loss, label="Train",  linewidth=2)
+    ax[0].plot(valid_loss, label="Validation", linewidth=2, linestyle="--")
+    ax[0].set_title("Loss Over Epochs", fontsize=13, fontweight="bold")
+    ax[0].set_ylabel("Loss")
+    ax[0].set_xlabel("Epoch")
+    ax[0].legend()
+    ax[0].grid(alpha=0.3)
+
+    ax[1].plot(train_acc, label="Train", linewidth=2)
+    ax[1].plot(valid_acc, label="Validation", linewidth=2, linestyle="--")
+    ax[1].set_title("Accuracy Over Epochs", fontsize=13, fontweight="bold")
+    ax[1].set_ylabel("Accuracy")
+    ax[1].set_xlabel("Epoch")
+    ax[1].legend()
+    ax[1].grid(alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir,'ACC_LOSS_Curves.png'), dpi=300, bbox_inches='tight')
+    plt.show()
+
+def show_confusion_matrix(all_labels, all_preds, classes_names:list, save_dir=os.getcwd()):
+    """Print classification report and plot confusion matrix."""
+    cm = confusion_matrix(np.array(all_labels), np.array(all_preds))
+
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=classes_names,
+                yticklabels=classes_names)
+    plt.title('Confusion Matrix', fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir,'confusion_matrix.png'), dpi=300, bbox_inches='tight')
+    plt.show()
+
+    print(classification_report(all_labels, all_preds, target_names=classes_names))
