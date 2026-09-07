@@ -150,36 +150,49 @@ def split_dataset(df,y_target,test_size=0.2,apply_leakage_check=False):
 
 def clear_dataset_images(data_yaml, target='augmented', confirm_prompt=True):
     """
-    Deletes images (and matching label files, if applicable) from the dataset.
-
-    Parameters:
-        data_yaml: dict with 'train' key pointing to the images path
-        target: 'augmented' -> only files with 'aug' in the name
-                'original'  -> only files WITHOUT 'aug' in the name
-                'all'       -> everything
-        confirm_prompt: if True, asks for y/n confirmation before deleting
+    Deletes dataset images based on target:
+        'augmented' -> only files with 'aug' in the name
+        'original'  -> only files WITHOUT 'aug' in the name
+        'all'       -> everything
     """
-
-    main_images_path = data_yaml['train']
 
     def matches_target(fname):
         if target == 'augmented':
-            return 'aug' in fname
+            return 'aug' in fname.lower()
         elif target == 'original':
-            return 'aug' not in fname
+            return 'aug' not in fname.lower()
         elif target == 'all':
             return True
         else:
-            raise ValueError(f"Invalid target: {target}. Use 'augmented', 'original', or 'all'.")
+            raise ValueError(
+                f"Invalid target: {target}. "
+                f"Use 'augmented', 'original', or 'all'."
+            )
 
-    # ---- collect files to delete ----
     files_to_delete = []
 
-    all_files_no_ext = [item.split('.')[0] for item in os.listdir(main_images_path)]
-    files_to_delete = [
-        os.path.join(main_images_path, f + '.jpg')
-        for f in all_files_no_ext if matches_target(f)
-    ]
+    for split, split_path in data_yaml.items():
+        if split not in ['train', 'val', 'test']:
+            continue
+
+        if not os.path.exists(split_path):
+            continue
+
+        for item in os.listdir(split_path):
+            item_path = os.path.join(split_path, item)
+
+            if os.path.isdir(item_path):
+                # Classifier dataset
+                for fname in os.listdir(item_path):
+                    fpath = os.path.join(item_path, fname)
+
+                    if os.path.isfile(fpath) and matches_target(fname):
+                        files_to_delete.append(fpath)
+
+            elif os.path.isfile(item_path):
+                # Segmentation dataset
+                if matches_target(item):
+                    files_to_delete.append(item_path)
 
     n_files = len(files_to_delete)
 
@@ -187,15 +200,17 @@ def clear_dataset_images(data_yaml, target='augmented', confirm_prompt=True):
         print(f"No '{target}' images found. Nothing to delete.")
         return
 
-    print(f"Found {n_files} images matching target='{target}'.")
+    print(f"Found {n_files} files matching target='{target}'.")
 
     if confirm_prompt:
-        confirm = input(f"Delete all {n_files} images? - (y or n): ").lower().strip()
+        confirm = input(
+            f"Delete all {n_files} files? - (y or n): "
+        ).lower().strip()
+
         if confirm != 'y':
             print("Cancelled. No files deleted.")
             return
 
-    # ---- delete ----
     deleted_count = 0
     failed_count = 0
 
@@ -203,16 +218,21 @@ def clear_dataset_images(data_yaml, target='augmented', confirm_prompt=True):
         try:
             os.remove(fpath)
 
-            
-            label_path = fpath.replace('images', 'labels').replace('.jpg', '.txt')
-            if os.path.exists(label_path):
-                os.remove(label_path)
+            # Delete matching YOLO label only for segmentation
+            if 'images' in fpath:
+                label_path = fpath.replace('images', 'labels')
+                label_path = os.path.splitext(label_path)[0] + '.txt'
+
+                if os.path.exists(label_path):
+                    os.remove(label_path)
 
             deleted_count += 1
+
         except Exception as e:
             print(f"Failed to remove {fpath}: {e}")
             failed_count += 1
 
     print(f"Deleted {deleted_count} images. Failed: {failed_count}.")
+
     if failed_count > 0:
         print("Check the failed deletions above and re-run if needed.")
