@@ -22,7 +22,7 @@ def predict(yolo_model, images_path, specific_image_name=None,
 
     original_image = cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB)
 
-    outputs = yolo_model.predict(original_image)
+    outputs = yolo_model.predict(original_image,verbose=False)
     output = outputs[0]
     names = output.names
 
@@ -40,7 +40,7 @@ def predict(yolo_model, images_path, specific_image_name=None,
 
     if len(present_classes) == 0:
         print(f"Only background detected in this image: {rand_image_name}.")
-        return
+        return "Background Detected"
 
     if save_dir:
         os.makedirs(os.path.join(save_dir, 'cropped_images'), exist_ok=True)
