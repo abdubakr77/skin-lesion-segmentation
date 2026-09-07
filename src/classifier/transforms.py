@@ -27,10 +27,7 @@ def get_transforms(image_size, apply_on_train=False):
         v2.ToDtype(torch.float32, scale=True),
     ]
 
-    augmentation = [
-        v2.RandomAutocontrast(p=0.5),
-        v2.RandomEqualize(p=0.5),
-    ]
+    augmentation = [] # Nothing to add
 
     tail = [v2.Normalize(IMAGENET_MEAN, IMAGENET_STD)]
 
