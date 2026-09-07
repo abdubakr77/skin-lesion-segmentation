@@ -7,7 +7,7 @@ def convert_to_classifier_crops(images_path, output_root, class_to_folder,
                                 train_df=None, valid_df=None, test_df=None,
                                 padding=0.15, remove_background=False):
 
-    splits = {'train': train_df, 'valid': valid_df, 'test': test_df}
+    splits = {'train': train_df, 'val': valid_df, 'test': test_df}
     counts = {}
 
     for split_name, df in splits.items():
