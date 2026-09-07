@@ -148,14 +148,18 @@ def build_transform(config):
 
 
 def augment_and_save(image, polygons, class_labels, n_copies, base_filename,
-                      output_images, output_labels, aug_config, debugging=False):
+                     output_images, output_labels, aug_config,
+                     debugging=False, dataset_type='segmentation'):
 
     img_h, img_w = image.shape[:2]
     transform = build_transform(aug_config)
 
-    
-    points_per_polygon = [len(p) for p in polygons]
-    all_points = [(x * img_w, y * img_h) for p in polygons for x, y in p]
+    if dataset_type == 'segmentation':
+        points_per_polygon = [len(p) for p in polygons]
+        all_points = [(x * img_w, y * img_h) for p in polygons for x, y in p]
+    else:
+        points_per_polygon = []
+        all_points = []
 
     all_images, all_polygons, all_labels, all_filenames = [], [], [], []
 
@@ -163,15 +167,23 @@ def augment_and_save(image, polygons, class_labels, n_copies, base_filename,
         augmented = transform(image=image, keypoints=all_points)
         new_img = augmented['image']
         new_points = augmented['keypoints']
-        new_h, new_w = new_img.shape[:2]
 
-        new_polygons = []
-        i = 0
-        for count in points_per_polygon:
-            pts = new_points[i:i + count]
-            pts = [(np.clip(x / new_w, 0, 1), np.clip(y / new_h, 0, 1)) for x, y in pts]
-            new_polygons.append(pts)
-            i += count
+        if dataset_type == 'segmentation':
+            new_h, new_w = new_img.shape[:2]
+
+            new_polygons = []
+            i = 0
+
+            for count in points_per_polygon:
+                pts = new_points[i:i + count]
+                pts = [
+                    (np.clip(x / new_w, 0, 1), np.clip(y / new_h, 0, 1))
+                    for x, y in pts
+                ]
+                new_polygons.append(pts)
+                i += count
+        else:
+            new_polygons = []
 
         all_images.append(new_img)
         all_polygons.append(new_polygons)
@@ -179,17 +191,36 @@ def augment_and_save(image, polygons, class_labels, n_copies, base_filename,
         all_filenames.append(f"{base_filename}_aug{n}")
 
     if debugging:
-        visualize_augmentation(all_images, all_polygons, all_labels, titles=all_filenames)
+        visualize_augmentation(
+            all_images,
+            all_polygons,
+            all_labels,
+            titles=all_filenames
+        )
         return
 
-    for new_img, new_polygons, new_labels, new_filename in zip(all_images, all_polygons, all_labels, all_filenames):
-        cv2.imwrite(os.path.join(output_images, f"{new_filename}.jpg"),
-                    cv2.cvtColor(new_img, cv2.COLOR_RGB2BGR))
+    for new_img, new_polygons, new_labels, new_filename in zip(
+        all_images, all_polygons, all_labels, all_filenames
+    ):
+        output_path = os.path.join(output_images, f"{new_filename}.jpg")
 
-        with open(os.path.join(output_labels, f"{new_filename}.txt"), 'w') as f:
-            for cls_id, polygon in zip(new_labels, new_polygons):
-                coords_str = '  '.join(f"{x} {y}" for x, y in polygon)
-                f.write(f"{cls_id}  {coords_str}\n")
+        cv2.imwrite(
+            output_path,
+            cv2.cvtColor(new_img, cv2.COLOR_RGB2BGR)
+        )
+
+        if dataset_type == 'segmentation':
+            label_path = os.path.join(
+                output_labels,
+                f"{new_filename}.txt"
+            )
+
+            with open(label_path, 'w') as f:
+                for cls_id, polygon in zip(new_labels, new_polygons):
+                    coords_str = '  '.join(
+                        f"{x} {y}" for x, y in polygon
+                    )
+                    f.write(f"{cls_id}  {coords_str}\n")
 
 
 
