@@ -39,6 +39,147 @@ def compute_class_weights(samples_per_class, method='inverse'):
     return weights / weights.sum() * len(samples_per_class)
 
 
+class ClassDistributionPlanner:
+    """
+    Turns raw per-class counts into two consistent, ready-to-use outputs:
+      1. how many samples each class should be augmented UP TO (or capped
+         down to) - for building your offline/online class-based augmentation
+      2. loss weights for that same distribution - for FocalLoss,
+         ClassBalancedLoss, LDAMLoss, or nn.CrossEntropyLoss(weight=...)
+
+    Why one class instead of eyeballing numbers per class: if you set target
+    counts by hand and compute loss weights separately from the raw counts,
+    the two can drift out of sync (e.g. you 5x-augment DF and VASC, but the
+    weights are still computed from the pre-augmentation counts, so you end
+    up double-correcting for an imbalance that no longer exists at that
+    magnitude). Building both from the same target distribution keeps them
+    honest.
+
+    Args:
+        class_counts: dict {class_name: raw_sample_count}, e.g.
+            {"NV": 6705, "MEL": 1113, "BKL": 1099, "BCC": 514,
+             "AKIEC": 327, "VASC": 142, "DF": 115}
+
+    Usage:
+        planner = ClassDistributionPlanner({
+            "NV": 6705, "BKL": 1099, "BCC": 514,
+            "AKIEC": 327, "VASC": 142, "DF": 115,
+        })
+
+        # 1) how many augmented copies to generate per class
+        targets = planner.target_counts(strategy='sqrt', min_count=300, max_count=1500)
+        # -> {"NV": 1500, "BKL": 1099, "BCC": 514, "AKIEC": 327, "VASC": 300, "DF": 300}
+        # use targets[c] - class_counts[c] as how many extra augmented images
+        # to generate for class c in your offline augmentation step
+
+        # 2) loss weights that match that same target distribution
+        weights = planner.loss_weights(use_target_counts=True, method='effective')
+        criterion = FocalLoss(alpha=weights, gamma=2.0)
+
+        # class-index order for wiring into a tensor/list-based API
+        print(planner.class_names)   # -> consistent order used everywhere above
+    """
+
+    def __init__(self, class_counts: dict):
+        if not class_counts:
+            raise ValueError("class_counts must be a non-empty dict of {class_name: count}")
+        self.class_names = list(class_counts.keys())
+        self.counts = torch.tensor(
+            [class_counts[c] for c in self.class_names], dtype=torch.float32
+        )
+        self._targets = None  # cached after target_counts() is called
+
+    def summary(self):
+        """Prints counts and the resulting imbalance ratio (max/min)."""
+        ratio = (self.counts.max() / self.counts.min()).item()
+        print(f"Imbalance ratio (largest/smallest class): {ratio:.1f}x")
+        for name, count in zip(self.class_names, self.counts.tolist()):
+            print(f"  {name:>8}: {int(count):>6}")
+
+    def target_counts(self, strategy='sqrt', min_count=None, max_count=None):
+        """
+        Decides how many samples each class SHOULD have after augmentation.
+
+        Args:
+            strategy: 'sqrt'     -> target ∝ sqrt(count). Softens the imbalance
+                                     without fully flattening it - a reasonable
+                                     default: majority classes stay largest,
+                                     minority classes get a meaningful boost
+                                     without absurd copy counts (e.g. 60x DF).
+                       'log'      -> target ∝ log(count + 1). Softer still than
+                                     sqrt - use if 'sqrt' still asks for more
+                                     augmented copies of DF/VASC than you're
+                                     comfortable generating.
+                       'balanced' -> every class targets the same count (the
+                                     current max, or max_count if given).
+                                     Most aggressive - higher overfitting risk
+                                     for classes as rare as DF (115 originals)
+                                     since most of the "extra" images are
+                                     augmented variants of a small base set.
+                       'none'     -> keep raw counts as-is (only min/max_count
+                                     clipping applied, if given).
+            min_count: floor - no class targets fewer than this many samples
+            max_count: ceiling - no class targets more than this many samples
+                       (also caps how much you oversample/duplicate the
+                       majority class, if strategy scales it up)
+
+        Returns:
+            dict {class_name: target_count} (rounded to int)
+        """
+        if strategy == 'sqrt':
+            raw = torch.sqrt(self.counts)
+        elif strategy == 'log':
+            raw = torch.log1p(self.counts)
+        elif strategy == 'balanced':
+            cap = max_count if max_count is not None else self.counts.max().item()
+            raw = torch.full_like(self.counts, cap)
+        elif strategy == 'none':
+            raw = self.counts.clone()
+        else:
+            raise ValueError(
+                f"Unsupported strategy='{strategy}', use 'sqrt', 'log', 'balanced', or 'none'"
+            )
+
+        if strategy in {'sqrt', 'log'}:
+            # rescale so the largest class keeps (approximately) its original
+            # count, and everything else scales up relative to it
+            raw = raw / raw.max() * self.counts.max()
+
+        if min_count is not None:
+            raw = torch.clamp(raw, min=min_count)
+        if max_count is not None:
+            raw = torch.clamp(raw, max=max_count)
+
+        targets = {name: int(round(v)) for name, v in zip(self.class_names, raw.tolist())}
+        self._targets = targets
+        return targets
+
+    def loss_weights(self, use_target_counts=False, method='effective'):
+        """
+        Loss weights matching either the raw counts or the planned target
+        counts (call target_counts() first if use_target_counts=True).
+
+        Args:
+            use_target_counts: if True, computes weights from the distribution
+                you planned with target_counts() instead of the raw counts -
+                use this when your augmentation will actually reach those
+                target counts, so the loss doesn't double-correct on top of
+                augmentation that already balanced things.
+            method: 'inverse' or 'effective' - see compute_class_weights()
+
+        Returns:
+            torch.Tensor of shape (num_classes,), in self.class_names order
+        """
+        if use_target_counts:
+            if self._targets is None:
+                raise ValueError("Call target_counts() before loss_weights(use_target_counts=True).")
+            counts = torch.tensor([self._targets[c] for c in self.class_names], dtype=torch.float32)
+        else:
+            counts = self.counts
+
+        return compute_class_weights(counts, method=method)
+
+
 def suggest_n_copies(
     data_yaml,
     class_names=None,
