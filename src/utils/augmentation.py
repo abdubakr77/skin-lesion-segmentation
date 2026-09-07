@@ -148,8 +148,8 @@ def build_transform(config):
 
 
 def augment_and_save(image, polygons, class_labels, n_copies, base_filename,
-                     output_images, output_labels, aug_config,
-                     debugging=False, dataset_type='segmentation'):
+                     output_images, output_labels, aug_config, debugging=False,
+                     dataset_type='segmentation'):
 
     img_h, img_w = image.shape[:2]
     transform = build_transform(aug_config)
@@ -170,16 +170,12 @@ def augment_and_save(image, polygons, class_labels, n_copies, base_filename,
 
         if dataset_type == 'segmentation':
             new_h, new_w = new_img.shape[:2]
-
             new_polygons = []
             i = 0
 
             for count in points_per_polygon:
                 pts = new_points[i:i + count]
-                pts = [
-                    (np.clip(x / new_w, 0, 1), np.clip(y / new_h, 0, 1))
-                    for x, y in pts
-                ]
+                pts = [(np.clip(x / new_w, 0, 1), np.clip(y / new_h, 0, 1)) for x, y in pts]
                 new_polygons.append(pts)
                 i += count
         else:
@@ -191,79 +187,168 @@ def augment_and_save(image, polygons, class_labels, n_copies, base_filename,
         all_filenames.append(f"{base_filename}_aug{n}")
 
     if debugging:
-        visualize_augmentation(
-            all_images,
-            all_polygons,
-            all_labels,
-            titles=all_filenames
-        )
+        visualize_augmentation(all_images, all_polygons, all_labels, titles=all_filenames)
         return
 
     for new_img, new_polygons, new_labels, new_filename in zip(
         all_images, all_polygons, all_labels, all_filenames
     ):
         output_path = os.path.join(output_images, f"{new_filename}.jpg")
-
-        cv2.imwrite(
-            output_path,
-            cv2.cvtColor(new_img, cv2.COLOR_RGB2BGR)
-        )
+        cv2.imwrite(output_path, cv2.cvtColor(new_img, cv2.COLOR_RGB2BGR))
 
         if dataset_type == 'segmentation':
-            label_path = os.path.join(
-                output_labels,
-                f"{new_filename}.txt"
-            )
+            label_path = os.path.join(output_labels, f"{new_filename}.txt")
 
             with open(label_path, 'w') as f:
                 for cls_id, polygon in zip(new_labels, new_polygons):
-                    coords_str = '  '.join(
-                        f"{x} {y}" for x, y in polygon
-                    )
+                    coords_str = '  '.join(f"{x} {y}" for x, y in polygon)
                     f.write(f"{cls_id}  {coords_str}\n")
 
 
 
-def apply_smart_aug(data_yaml, aug_config, n_copies_per_class=None, apply_debug=False, clear_existing=False):
+def apply_smart_aug(data_yaml, aug_config, n_copies_per_class=None,
+                    apply_debug=False, clear_existing=False,
+                    dataset_type='segmentation'):
 
-    main_images_path = data_yaml['train']
-    labels_path = main_images_path.replace('images', 'labels')
-    all_files_no_ext = [f.split('.')[0] for f in os.listdir(main_images_path)]
-
-    aug_exists = any('aug' in f for f in all_files_no_ext)
-
-    if aug_exists and not apply_debug:
-        if clear_existing:
-            clear_dataset_images(data_yaml, target='augmented', confirm_prompt=False)
-        else:
-            print("Warning: Found existing augmented images. Pass clear_existing=True to clear them, "
-                  "otherwise new copies get added on top of the existing ones.")
-
-    if apply_debug:
-        rand_fname = np.random.choice(all_files_no_ext)
-        image, polygons, class_labels = read_image_and_label(rand_fname, data_yaml)
-        augment_and_save(image, polygons, class_labels, n_copies=3,
-                          base_filename=rand_fname, output_images=None, output_labels=None,
-                          aug_config=aug_config, debugging=True)
-        return
+    main_path = data_yaml['train']
 
     if n_copies_per_class is None:
-        raise ValueError("n_copies_per_class is required. Use suggest_n_copies(data_yaml) to get a starting point.")
+        raise ValueError(
+            "n_copies_per_class is required. Use suggest_n_copies(data_yaml) "
+            "to get a starting point."
+        )
 
-    for fname in tqdm(all_files_no_ext, desc='Augmenting Images Now...'):
-        if 'aug' in fname:
-            continue
+    if dataset_type == 'segmentation':
+        labels_path = main_path.replace('images', 'labels')
+        all_files_no_ext = [f.split('.')[0] for f in os.listdir(main_path)]
+        aug_exists = any('aug' in f for f in all_files_no_ext)
 
-        image, polygons, class_labels = read_image_and_label(fname, data_yaml)
+        if aug_exists and not apply_debug:
+            if clear_existing:
+                clear_dataset_images(data_yaml, target='augmented', confirm_prompt=False)
+            else:
+                print("Warning: Found existing augmented images. Pass clear_existing=True to clear them, otherwise new copies get added on top of the existing ones.")
 
-        # decide n_copies for this image based on the rarest class it contains
-        n = max((n_copies_per_class.get(cls_id, 0) for cls_id in class_labels), default=0)
-        if n <= 0:
-            continue
+        if apply_debug:
+            rand_fname = np.random.choice(all_files_no_ext)
+            image, polygons, class_labels = read_image_and_label(rand_fname, data_yaml)
 
-        augment_and_save(image, polygons, class_labels, n_copies=n,
-                          base_filename=fname, output_images=main_images_path,
-                          output_labels=labels_path, aug_config=aug_config)
+            augment_and_save(
+                image, polygons, class_labels, n_copies=3,
+                base_filename=rand_fname,
+                output_images=None, output_labels=None,
+                aug_config=aug_config,
+                debugging=True,
+                dataset_type='segmentation'
+            )
+            return
+
+        for fname in tqdm(all_files_no_ext, desc='Augmenting Images Now...'):
+            if 'aug' in fname:
+                continue
+
+            image, polygons, class_labels = read_image_and_label(fname, data_yaml)
+
+            n = max((n_copies_per_class.get(cls_id, 0) for cls_id in class_labels), default=0)
+
+            if n <= 0:
+                continue
+
+            augment_and_save(
+                image, polygons, class_labels, n_copies=n,
+                base_filename=fname,
+                output_images=main_path,
+                output_labels=labels_path,
+                aug_config=aug_config,
+                dataset_type='segmentation'
+            )
+
+    elif dataset_type == 'classifier':
+        class_dirs = [
+            d for d in os.listdir(main_path)
+            if os.path.isdir(os.path.join(main_path, d))
+        ]
+
+        if not class_dirs:
+            raise ValueError(f"No class folders found in: {main_path}")
+
+        aug_exists = any(
+            'aug' in fname.lower()
+            for class_name in class_dirs
+            for fname in os.listdir(os.path.join(main_path, class_name))
+        )
+
+        if aug_exists and not apply_debug:
+            if clear_existing:
+                clear_dataset_images(data_yaml, target='augmented', confirm_prompt=False)
+            else:
+                print("Warning: Found existing augmented images. Pass clear_existing=True to clear them, otherwise new copies get added on top of the existing ones.")
+
+        if apply_debug:
+            class_name = np.random.choice(class_dirs)
+            class_path = os.path.join(main_path, class_name)
+
+            image_files = [
+                f for f in os.listdir(class_path)
+                if os.path.isfile(os.path.join(class_path, f)) and 'aug' not in f.lower()
+            ]
+
+            if not image_files:
+                print(f"No images found in class: {class_name}")
+                return
+
+            fname = np.random.choice(image_files)
+            img_path = os.path.join(class_path, fname)
+
+            image = cv2.imread(img_path)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            augment_and_save(
+                image, [], [class_name], n_copies=3,
+                base_filename=os.path.splitext(fname)[0],
+                output_images=None, output_labels=None,
+                aug_config=aug_config,
+                debugging=True,
+                dataset_type='classifier'
+            )
+            return
+
+        for class_name in class_dirs:
+            n = n_copies_per_class.get(class_name, 0)
+
+            if n <= 0:
+                continue
+
+            class_path = os.path.join(main_path, class_name)
+
+            image_files = [
+                f for f in os.listdir(class_path)
+                if os.path.isfile(os.path.join(class_path, f)) and 'aug' not in f.lower()
+            ]
+
+            for fname in tqdm(image_files, desc=f'Augmenting {class_name}...'):
+                img_path = os.path.join(class_path, fname)
+                image = cv2.imread(img_path)
+
+                if image is None:
+                    print(f"WARNING: Could not read image: {img_path}")
+                    continue
+
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+                augment_and_save(
+                    image, [], [class_name], n_copies=n,
+                    base_filename=os.path.splitext(fname)[0],
+                    output_images=class_path,
+                    output_labels=None,
+                    aug_config=aug_config,
+                    dataset_type='classifier'
+                )
+
+    else:
+        raise ValueError(
+            f"Invalid dataset_type: {dataset_type}. Use 'segmentation' or 'classifier'."
+        )
 
 
 def suggest_n_copies(data_yaml, class_names=None, dataset_type='segmentation'):
