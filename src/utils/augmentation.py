@@ -12,10 +12,13 @@ from skimage.morphology import skeletonize
 HAIR_COLORS = [(20, 15, 10), (40, 25, 15), (60, 50, 45), (10, 10, 10)]
 
 
-def read_image_and_label(filename_no_ext, data_yaml):
+def read_image_and_label(filename_no_ext, data_yaml, dataset_type='segmentation', class_name=None):
     img_path = os.path.join(data_yaml['train'], filename_no_ext + ".jpg")
     image = cv2.imread(img_path)
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    if dataset_type == 'classifier':
+        return image, [], [class_name]
 
     labels_path = data_yaml['train'].replace('images', 'labels')
     label_path = os.path.join(labels_path, filename_no_ext + ".txt")
