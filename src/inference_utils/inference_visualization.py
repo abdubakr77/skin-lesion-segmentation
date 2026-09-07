@@ -19,6 +19,26 @@ def _colored_overlay(binary_mask, color, alpha):
     overlay[binary_mask == 1] = (*color[:3], alpha)
     return overlay
 
+def _get_class_match_color(pred_classes, true_classes):
+    """Compares predicted vs true class sets and returns a status color.
+
+    - green: exact match (same set of classes, including both empty = correct
+      "nothing here" case)
+    - yellow: partial match (at least one shared class, but sets differ -
+      covers both "true has 2 classes, model got one right" and "model
+      predicted extra classes but one of them is correct")
+    - red: no overlap at all (completely wrong, or a false positive/negative
+      with zero shared classes)
+    """
+    pred_set = set(pred_classes)
+    true_set = set(true_classes)
+
+    if pred_set == true_set:
+        return '#16a34a'  # green
+    if pred_set & true_set:
+        return '#ca8a04'  # yellow
+    return '#dc2626'  # red
+
 
 def plot_inference_comparison(image, pred_masks, class_names, colors,
                                true_mask=None, gt_kind=None,
@@ -28,11 +48,18 @@ def plot_inference_comparison(image, pred_masks, class_names, colors,
     Args:
         image: RGB image array
         pred_masks: dict {cls_id: binary_mask} of predicted classes present
-        class_names: model.names dict (for legend labels)
+        class_names: model.names dict (for legend labels, and used to resolve
+                     ground-truth class ids too - assumes GT ids share the
+                     same class-id space as this model, which holds when
+                     comparing a stage's predictions against that same
+                     stage's ground truth)
         colors: dict {cls_id: color}, from get_class_colors()
         true_mask: ground truth mask, or None if unavailable
         gt_kind: 'binary' (0/1, no class info) or 'multiclass' (-1=background,
-                 real class ids elsewhere) - tells us how to read true_mask
+                 real class ids elsewhere) - tells us how to read true_mask.
+                 The title color-coding (red/yellow/green) and the "True: ..."
+                 label only apply when gt_kind == 'multiclass', since binary
+                 ground truth carries no class identity to compare against.
         overlap_metrics: optional dict {'iou': ..., 'dice': ...} shown as a
                          comparison box under the figure
         title: figure title
@@ -90,7 +117,19 @@ def plot_inference_comparison(image, pred_masks, class_names, colors,
                 axes[3].contour((true_mask == cls_id).astype('uint8'), colors='white', linewidths=1.5)
     axes[3].axis('off')
 
-    fig.suptitle(title)
+    # ---- Title, with true-class label and correctness color when possible ----
+    suptitle_color = 'black'
+    full_title = title
+
+    if true_mask is not None and gt_kind == 'multiclass':
+        true_classes = [int(c) for c in np.unique(true_mask) if c != -1]
+        pred_classes = list(pred_masks.keys())
+
+        true_names = ', '.join(class_names[c] for c in sorted(true_classes)) if true_classes else 'None'
+        full_title = f"{title} | True: {true_names}"
+        suptitle_color = _get_class_match_color(pred_classes, true_classes)
+
+    fig.suptitle(full_title, color=suptitle_color, fontweight='bold')
 
     if overlap_metrics:
         text = f"IoU: {overlap_metrics['iou']:.3f}  |  Dice: {overlap_metrics['dice']:.3f}"
