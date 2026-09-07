@@ -232,32 +232,47 @@ def apply_smart_aug(data_yaml, aug_config, n_copies_per_class=None, apply_debug=
                           output_labels=labels_path, aug_config=aug_config)
 
 
-def suggest_n_copies(data_yaml, class_names=None):
-    """
-    Counts how many label instances each class has across all label files,
-    and suggests how many augmented copies per image would bring every class
-    close to the largest class count.
-
-    Args:
-        data_yaml: dict with a 'train' key pointing to the images folder
-        class_names: optional dict/list mapping class_id -> class name, for readable output
-
-    Returns:
-        counts: dict of class_id -> current instance count
-        suggestions: dict of class_id -> suggested n_copies
-    """
-    labels_path = data_yaml['train'].replace('images', 'labels')
-    all_files_no_ext = [f.split('.')[0] for f in os.listdir(data_yaml['train'])]
-
+def suggest_n_copies(data_yaml, class_names=None, dataset_type='segmentation'):
     counts = {}
-    for fname in all_files_no_ext:
-        label_path = os.path.join(labels_path, fname + '.txt')
-        if not os.path.exists(label_path):
-            continue
-        with open(label_path, 'r') as f:
-            for line in f.readlines():
-                cls_id = int(float(line.split()[0]))
-                counts[cls_id] = counts.get(cls_id, 0) + 1
+
+    if dataset_type == 'segmentation':
+        labels_path = data_yaml['train'].replace('images', 'labels')
+        all_files_no_ext = [f.split('.')[0] for f in os.listdir(data_yaml['train'])]
+
+        for fname in all_files_no_ext:
+            label_path = os.path.join(labels_path, fname + '.txt')
+
+            if not os.path.exists(label_path):
+                continue
+
+            with open(label_path, 'r') as f:
+                for line in f.readlines():
+                    cls_id = int(float(line.split()[0]))
+                    counts[cls_id] = counts.get(cls_id, 0) + 1
+
+    elif dataset_type == 'classifier':
+        train_path = data_yaml['train']
+
+        for class_name in os.listdir(train_path):
+            class_path = os.path.join(train_path, class_name)
+
+            if not os.path.isdir(class_path):
+                continue
+
+            counts[class_name] = sum(
+                os.path.isfile(os.path.join(class_path, fname))
+                for fname in os.listdir(class_path)
+            )
+
+    else:
+        raise ValueError(
+            f"Invalid dataset_type: {dataset_type}. "
+            f"Use 'segmentation' or 'classifier'."
+        )
+
+    if not counts:
+        print("No classes found.")
+        return {}, {}
 
     max_count = max(counts.values())
 
