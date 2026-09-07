@@ -79,3 +79,121 @@ def show_model_layers(model: nn.Module, max_depth: int = 1):
 
     print(f"Layer names for {model.__class__.__name__}:")
     _walk(model)
+
+
+# ----------------------------------------------------------------------------
+# Main builder
+# ----------------------------------------------------------------------------
+
+def build_model(
+    model_fn,
+    weights,
+    num_classes,
+    lr=1e-3,
+    weight_decay=0.0001,
+    epochs=10,
+    freeze_backbone=True,
+    unfreeze_layers=None,
+    optimizer_type='adamw',
+    scheduler_type='cosine',
+    dropout=0.0,
+    steps_per_epoch=None,
+):
+    """
+    Generic classifier builder: works with ANY torchvision classification model
+    and its matching Weights enum - not just Swin.
+
+    Args:
+        model_fn: the torchvision model constructor, e.g. swin_v2_t, resnet50, efficientnet_b0
+        weights:  the matching Weights enum value, e.g. Swin_V2_T_Weights.DEFAULT
+
+    It automatically:
+      - loads the model with pretrained weights
+      - finds the final classification layer regardless of its name/location
+      - replaces it with a new Linear (optionally preceded by Dropout)
+      - freezes the backbone and keeps only the new head trainable (if freeze_backbone=True)
+      - unfreezes any extra layers you name in `unfreeze_layers`
+
+    To find out what layer names to use in `unfreeze_layers` for whichever model
+    you pick, call `show_model_layers(model)` first - it's not tied to Swin.
+
+    unfreeze_layers example: ['features.6', 'features.7', 'norm'] unfreezes any
+    parameter whose name contains one of these substrings (works the same way
+    regardless of which model_fn you passed in).
+
+    Usage:
+        from torchvision.models import swin_v2_t, Swin_V2_T_Weights
+        model, optimizer, scheduler = build_model(swin_v2_t, Swin_V2_T_Weights.DEFAULT, num_classes=5)
+
+        from torchvision.models import resnet50, ResNet50_Weights
+        model, optimizer, scheduler = build_model(resnet50, ResNet50_Weights.DEFAULT, num_classes=5)
+
+        from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights
+        model, optimizer, scheduler = build_model(efficientnet_b0, EfficientNet_B0_Weights.DEFAULT, num_classes=5)
+    """
+    from torch.optim import AdamW, lr_scheduler, SGD
+
+    model = model_fn(weights=weights)
+    print(f"Model Loaded: {model_fn.__name__} (num_classes={num_classes})")
+
+    # ---- generically find & replace the classification head ----
+    head_path, _, in_features = _find_classification_head(model)
+
+    if dropout > 0:
+        new_head = nn.Sequential(nn.Dropout(dropout), nn.Linear(in_features, num_classes))
+    else:
+        new_head = nn.Linear(in_features, num_classes)
+
+    _set_module_by_path(model, head_path, new_head)
+    print(f"Head Replaced: '{head_path}' -> Linear(in_features={in_features}, out_features={num_classes})")
+
+    # ---- freezing ----
+    if freeze_backbone:
+        for param in model.parameters():
+            param.requires_grad = False
+        # keep the newly plugged-in head trainable
+        for param in _get_module_by_path(model, head_path).parameters():
+            param.requires_grad = True
+        print("Backbone Frozen: True | Head Trainable: True")
+    else:
+        print("Backbone Frozen: False | All parameters trainable")
+
+    if unfreeze_layers:
+        for name, param in model.named_parameters():
+            if any(layer_name in name for layer_name in unfreeze_layers):
+                param.requires_grad = True
+        print(f"Selective Unfreeze Enabled: {unfreeze_layers}")
+
+    # ---- optimizer ----
+    opt_type = optimizer_type.strip().lower()
+    if opt_type == 'adamw':
+        optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+        print(f"Optimizer Loaded: AdamW (lr={lr}, weight_decay={weight_decay})")
+    elif opt_type in {'sgd', 'stochastic_gradient_descent'}:
+        optimizer = SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=weight_decay)
+        print(f"Optimizer Loaded: SGD (lr={lr}, momentum=0.9, weight_decay={weight_decay})")
+    else:
+        raise ValueError(f"Unsupported optimizer_type='{optimizer_type}'")
+
+    # ---- scheduler ----
+    sched_type = scheduler_type.strip().lower()
+    if sched_type in {'cosine', 'cosineannealing'}:
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
+        print(f"Scheduler Loaded: CosineAnnealingLR (T_max={epochs}, eta_min=1e-5)")
+    elif sched_type in {'step', 'steplr'}:
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=max(1, epochs // 3), gamma=0.1)
+        print(f"Scheduler Loaded: StepLR (step_size={max(1, epochs // 3)}, gamma=0.1)")
+    elif sched_type in {'reduce_on_plateau', 'reducelronplateau'}:
+        scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=1)
+        print("Scheduler Loaded: ReduceLROnPlateau (mode='min', factor=0.5, patience=1)")
+    elif sched_type in {'one_cycle', 'onecycle'}:
+        if steps_per_epoch is None:
+            steps_per_epoch = 1
+        scheduler = lr_scheduler.OneCycleLR(optimizer, max_lr=lr, steps_per_epoch=steps_per_epoch, epochs=epochs)
+        print(f"Scheduler Loaded: OneCycleLR (max_lr={lr}, steps_per_epoch={steps_per_epoch}, epochs={epochs})")
+    else:
+        scheduler = None
+        print(f"Scheduler Loaded: None (scheduler_type='{scheduler_type}')")
+
+    print("Model Build Complete")
+    return model, optimizer, scheduler
