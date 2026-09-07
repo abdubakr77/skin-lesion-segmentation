@@ -1,5 +1,44 @@
 import os
 
+import torch
+
+
+def compute_class_weights(samples_per_class, method='inverse'):
+    """
+    Computes per-class weights from class sample counts, for use with
+    nn.CrossEntropyLoss(weight=...), FocalLoss(alpha=...), or LDAMLoss(weight=...).
+
+    Args:
+        samples_per_class: list/tensor of sample counts per class, in class-index
+                            order (e.g. [NV_count, BKL_count, BCC_count, ...])
+        method: 'inverse'   -> classic 1/count, normalized
+                'effective' -> Class-Balanced "effective number of samples"
+                               weighting (Cui et al., 2019) with beta=0.999.
+                               Usually works better than plain inverse-frequency
+                               when a couple of classes are extremely rare
+                               (like your DF/VASC vs NV imbalance) since raw
+                               inverse-frequency can overweight rare classes
+                               too aggressively and destabilize training.
+
+    Returns:
+        torch.Tensor of shape (num_classes,), weights normalized to sum to
+        num_classes so the effective learning rate scale stays comparable
+        to unweighted training.
+    """
+    samples_per_class = torch.as_tensor(samples_per_class, dtype=torch.float32)
+
+    if method == 'inverse':
+        weights = 1.0 / samples_per_class
+    elif method == 'effective':
+        beta = 0.999
+        effective_num = 1.0 - torch.pow(torch.tensor(beta), samples_per_class)
+        weights = (1.0 - beta) / effective_num
+    else:
+        raise ValueError(f"Unsupported method='{method}', use 'inverse' or 'effective'")
+
+    return weights / weights.sum() * len(samples_per_class)
+
+
 def suggest_n_copies(
     data_yaml,
     class_names=None,
