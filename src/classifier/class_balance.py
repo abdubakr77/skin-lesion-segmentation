@@ -160,3 +160,26 @@ def suggest_n_copies(
         projected_counts = {class_names[k]: v for k, v in projected_counts.items()}
 
     return counts, suggestions, projected_counts
+
+
+def residual_loss_weights(projected_counts: dict, method='effective'):
+    """
+    Loss weights computed from POST-augmentation projected counts (the third
+    value returned by suggest_n_copies), so the weighting only corrects for
+    whatever imbalance the suggested augmentation didn't already fix - instead
+    of double-correcting for the full raw imbalance on top of augmentation.
+
+    Args:
+        projected_counts: dict {class_name_or_id: projected_count}, i.e. the
+            `projected_counts` returned by suggest_n_copies()
+        method: 'inverse' or 'effective' - see compute_class_weights()
+
+    Returns:
+        dict {class_name_or_id: weight}, same key order as given. Convert to
+        a tensor in your class-index order before passing to FocalLoss(alpha=...)
+        or nn.CrossEntropyLoss(weight=...).
+    """
+    keys = list(projected_counts.keys())
+    values = [projected_counts[k] for k in keys]
+    weights = compute_class_weights(values, method=method)
+    return dict(zip(keys, weights.tolist()))
