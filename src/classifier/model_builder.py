@@ -133,8 +133,7 @@ def show_model_layers(model: nn.Module, max_depth: int = 1, recommend_last_n: in
 # ----------------------------------------------------------------------------
 
 def build_model(
-    model_fn,
-    weights,
+    model,
     num_classes,
     lr=1e-3,
     weight_decay=0.0001,
@@ -153,6 +152,7 @@ def build_model(
     Args:
         model_fn: the torchvision model constructor, e.g. swin_v2_t, resnet50, efficientnet_b0
         weights:  the matching Weights enum value, e.g. Swin_V2_T_Weights.DEFAULT
+        steps_per_epoch: Number of steps per epoch. Only used when scheduler_type='onecycle'
 
     It automatically:
       - loads the model with pretrained weights
@@ -180,8 +180,7 @@ def build_model(
     """
     from torch.optim import AdamW, lr_scheduler, SGD
 
-    model = model_fn(weights=weights)
-    print(f"Model Loaded: {model_fn.__name__} (num_classes={num_classes})")
+    print(f"Model Loaded: {model.__class__.__name__} (num_classes={num_classes})")
 
     # ---- generically find & replace the classification head ----
     head_path, _, in_features = _find_classification_head(model)
