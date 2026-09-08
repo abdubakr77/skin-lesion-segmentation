@@ -1,5 +1,7 @@
 import torch.nn as nn
 
+HEAD_KEYWORDS = ('head', 'heads', 'fc', 'classifier')
+
 # ----------------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------------
@@ -51,34 +53,79 @@ def _set_module_by_path(model: nn.Module, dotted_path: str, new_module: nn.Modul
     setattr(parent, parts[-1], new_module)
 
 
-def show_model_layers(model: nn.Module, max_depth: int = 1):
+def show_model_layers(model: nn.Module, max_depth: int = 1, recommend_last_n: int = 2):
     """
-    Prints the model's submodule names so you know what strings to pass into
-    `unfreeze_layers`. Works generically for ANY model you pass in (Swin,
-    ResNet, EfficientNet, ConvNeXt, ViT, ...) - not hardcoded to one architecture.
+    Prints the model's submodule names, marking which ones are recommended
+    fine-tuning candidates based on generic heuristics (works for any
+    architecture: Swin, ResNet, EfficientNet, ConvNeXt, ViT, ...):
+
+    - The classification head (fc / head / classifier / heads) is always
+      recommended, since it's task-specific and untrained for your data.
+    - The last `recommend_last_n` parameterized blocks before the head are
+      recommended, since late layers hold the most task-specific features.
+    - Everything else with trainable parameters is marked as usually kept
+      frozen (early, general-purpose features).
+    - Layers with zero trainable parameters (activations, pooling, flatten,
+      permute, dropout) are marked as having nothing to unfreeze.
 
     Args:
         max_depth: how many levels deep to expand nested blocks
                    (1 = top-level names only, 2 = one level inside each block, ...)
+                   Increase this if a recommended block still looks too broad.
+        recommend_last_n: how many of the last parameterized backbone blocks
+                           to flag as recommended, besides the head
 
-    Example:
-        model = swin_v2_t(weights=Swin_V2_T_Weights.DEFAULT)
-        show_model_layers(model)
-        # features.0, features.1, ..., features.7, norm, permute, avgpool, flatten, head
-
-        model = resnet50(weights=ResNet50_Weights.DEFAULT)
-        show_model_layers(model)
-        # conv1, bn1, relu, maxpool, layer1, layer2, layer3, layer4, avgpool, fc
+    Returns:
+        recommended: list of layer name strings, ready to pass into
+                     `unfreeze_layers`
     """
+    entries = []  # dicts: name, has_params, is_leaf
+
     def _walk(module, prefix="", depth=0):
         for name, child in module.named_children():
             full_name = f"{prefix}.{name}" if prefix else name
-            print(full_name)
-            if depth < max_depth - 1:
+            has_children = any(True for _ in child.named_children())
+            will_expand = has_children and depth < max_depth - 1
+            has_params = any(True for _ in child.parameters(recurse=True))
+
+            entries.append({'name': full_name, 'has_params': has_params, 'is_leaf': not will_expand})
+
+            if will_expand:
                 _walk(child, full_name, depth + 1)
 
-    print(f"Layer names for {model.__class__.__name__}:")
     _walk(model)
+
+    def _is_head(name):
+        return name.split('.')[-1].lower() in HEAD_KEYWORDS
+
+    leaves = [e for e in entries if e['is_leaf']]
+
+    head_names = [e['name'] for e in leaves if e['has_params'] and _is_head(e['name'])]
+    backbone_candidates = [e['name'] for e in leaves if e['has_params'] and e['name'] not in head_names]
+    recommended_backbone = backbone_candidates[-recommend_last_n:] if recommend_last_n > 0 else []
+
+    recommended = recommended_backbone + head_names
+
+    print(f"Layer names for {model.__class__.__name__}:")
+    print("(* = recommended to unfreeze)\n")
+
+    for e in entries:
+        if not e['is_leaf']:
+            tag = "(expanded below)"
+        elif not e['has_params']:
+            tag = "(no trainable parameters)"
+        elif e['name'] in head_names:
+            tag = "* recommended (classifier head)"
+        elif e['name'] in recommended_backbone:
+            tag = "* recommended (late backbone block)"
+        else:
+            tag = "usually kept frozen"
+
+        print(f"{e['name']:<25}{tag}")
+
+    print(f"\nSuggested: unfreeze_layers(model, {recommended})")
+
+    return recommended
 
 
 # ----------------------------------------------------------------------------
