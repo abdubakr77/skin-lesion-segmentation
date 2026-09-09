@@ -1,5 +1,4 @@
 import os
-
 import torch
 
 
@@ -44,7 +43,7 @@ class ClassDistributionPlanner:
     Turns raw per-class counts into two consistent, ready-to-use outputs:
       1. how many samples each class should be augmented UP TO (or capped
          down to) - for building your offline/online class-based augmentation
-      2. loss weights for that same distribution - for FocalLoss,
+      2. loss weights for the resulting class distribution - for FocalLoss,
          ClassBalancedLoss, LDAMLoss, or nn.CrossEntropyLoss(weight=...)
 
     Why one class instead of eyeballing numbers per class: if you set target
@@ -52,8 +51,8 @@ class ClassDistributionPlanner:
     the two can drift out of sync (e.g. you 5x-augment DF and VASC, but the
     weights are still computed from the pre-augmentation counts, so you end
     up double-correcting for an imbalance that no longer exists at that
-    magnitude). Building both from the same target distribution keeps them
-    honest.
+    magnitude). Building the augmentation plan first and computing loss
+    weights from its projected counts keeps them consistent.
 
     Args:
         class_counts: dict {class_name: raw_sample_count}, e.g.
@@ -61,25 +60,36 @@ class ClassDistributionPlanner:
              "AKIEC": 327, "VASC": 142, "DF": 115}
 
     Usage:
+        # Option A: you already have counts
         planner = ClassDistributionPlanner({
             "NV": 6705, "BKL": 1099, "BCC": 514,
             "AKIEC": 327, "VASC": 142, "DF": 115,
         })
 
-        # 1) how many augmented copies to generate per class
-        targets = planner.target_counts(strategy='sqrt', min_count=300, max_count=1500)
-        # -> {"NV": 1500, "BKL": 1099, "BCC": 514, "AKIEC": 327, "VASC": 300, "DF": 300}
-        # use targets[c] - class_counts[c] as how many extra augmented images
-        # to generate for class c in your offline augmentation step
+        # Option B: build directly from a YOLO/classifier data_yaml
+        planner = ClassDistributionPlanner.from_data_yaml(
+            data_yaml, class_names=names, dataset_type='segmentation'
+        )
 
-        # 2) loss weights that match that same target distribution
-        weights = planner.loss_weights(use_target_counts=True, method='effective')
+        # 1) Build the augmentation plan
+        plan = planner.augmentation_plan(
+            strategy='sqrt', min_count=300, max_count=1500
+        )
+
+        # 2) Use the number of copies for augmentation
+        n_copies = plan['n_copies']
+
+        # 3) Compute loss weights from the projected post-augmentation counts
+        weights = planner.loss_weights(
+            counts=plan['projected_counts'],
+            method='effective'
+        )
+
         criterion = FocalLoss(alpha=weights, gamma=2.0)
 
         # class-index order for wiring into a tensor/list-based API
         print(planner.class_names)   # -> consistent order used everywhere above
     """
-
     def __init__(self, class_counts: dict):
         if not class_counts:
             raise ValueError("class_counts must be a non-empty dict of {class_name: count}")
@@ -87,7 +97,63 @@ class ClassDistributionPlanner:
         self.counts = torch.tensor(
             [class_counts[c] for c in self.class_names], dtype=torch.float32
         )
-        self._targets = None  # cached after target_counts() is called
+
+    @classmethod
+    def from_data_yaml(cls, data_yaml, class_names=None, dataset_type='segmentation'):
+        """
+        Builds a ClassDistributionPlanner directly from a data_yaml dict,
+        counting raw samples per class instead of requiring you to pass
+        class_counts yourself.
+
+        Args:
+            data_yaml: dict with at least a 'train' key pointing to the
+                images dir (segmentation) or the class-subfolder root
+                (classifier)
+            class_names: optional list/dict mapping class id -> class name.
+                For dataset_type='segmentation', label files use integer
+                class ids, so pass this to get readable names instead of
+                raw ids as keys. For dataset_type='classifier', folder
+                names are already used as-is, so this is normally not
+                needed.
+            dataset_type: 'segmentation' (reads YOLO-style .txt labels) or
+                'classifier' (reads one subfolder per class)
+
+        Returns:
+            ClassDistributionPlanner instance built from the counted classes
+        """
+        counts = {}
+        if dataset_type == 'segmentation':
+            labels_path = data_yaml['train'].replace('images', 'labels')
+            all_files_no_ext = [f.split('.')[0] for f in os.listdir(data_yaml['train'])]
+            for fname in all_files_no_ext:
+                label_path = os.path.join(labels_path, fname + '.txt')
+                if not os.path.exists(label_path):
+                    continue
+                with open(label_path, 'r') as f:
+                    for line in f.readlines():
+                        cls_id = int(float(line.split()[0]))
+                        counts[cls_id] = counts.get(cls_id, 0) + 1
+        elif dataset_type == 'classifier':
+            train_path = data_yaml['train']
+            for class_name in os.listdir(train_path):
+                class_path = os.path.join(train_path, class_name)
+                if not os.path.isdir(class_path):
+                    continue
+                counts[class_name] = sum(
+                    os.path.isfile(os.path.join(class_path, fname))
+                    for fname in os.listdir(class_path)
+                )
+        else:
+            raise ValueError(
+                f"Invalid dataset_type: {dataset_type}. "
+                f"Use 'segmentation' or 'classifier'."
+            )
+
+        if not counts:
+            raise ValueError("No classes found in data_yaml['train'].")
+        if class_names:
+            counts = {class_names[k]: v for k, v in counts.items()}
+        return cls(counts)
 
     def summary(self):
         """Prints counts and the resulting imbalance ratio (max/min)."""
@@ -96,9 +162,16 @@ class ClassDistributionPlanner:
         for name, count in zip(self.class_names, self.counts.tolist()):
             print(f"  {name:>8}: {int(count):>6}")
 
-    def target_counts(self, strategy='sqrt', min_count=None, max_count=None):
+    def augmentation_plan(self, strategy='sqrt', min_count=None, max_count=None):
         """
-        Decides how many samples each class SHOULD have after augmentation.
+        Builds an augmentation plan from the current class distribution.
+
+        The target count for each class is calculated internally using the
+        selected strategy, then converted into a whole-number number of
+        augmented copies per existing image. Because the number of copies
+        must be an integer, projected_counts may differ from the internal
+        target count. Use projected_counts when computing loss weights after
+        augmentation.
 
         Args:
             strategy: 'sqrt'     -> target ∝ sqrt(count). Softens the imbalance
@@ -106,25 +179,36 @@ class ClassDistributionPlanner:
                                      default: majority classes stay largest,
                                      minority classes get a meaningful boost
                                      without absurd copy counts (e.g. 60x DF).
+
                        'log'      -> target ∝ log(count + 1). Softer still than
                                      sqrt - use if 'sqrt' still asks for more
                                      augmented copies of DF/VASC than you're
                                      comfortable generating.
+
                        'balanced' -> every class targets the same count (the
                                      current max, or max_count if given).
                                      Most aggressive - higher overfitting risk
                                      for classes as rare as DF (115 originals)
                                      since most of the "extra" images are
                                      augmented variants of a small base set.
+
                        'none'     -> keep raw counts as-is (only min/max_count
                                      clipping applied, if given).
+
             min_count: floor - no class targets fewer than this many samples
+
             max_count: ceiling - no class targets more than this many samples
                        (also caps how much you oversample/duplicate the
                        majority class, if strategy scales it up)
 
         Returns:
-            dict {class_name: target_count} (rounded to int)
+            dict with:
+              'current_counts':   {class_name: current raw count}
+              'n_copies':         {class_name: how many extra copies per
+                                   existing image to generate}
+              'projected_counts': {class_name: current_count * (n_copies + 1)}
+                                   (the count you'll actually end up with after
+                                   augmentation)
         """
         if strategy == 'sqrt':
             raw = torch.sqrt(self.counts)
@@ -141,8 +225,8 @@ class ClassDistributionPlanner:
             )
 
         if strategy in {'sqrt', 'log'}:
-            # rescale so the largest class keeps (approximately) its original
-            # count, and everything else scales up relative to it
+            # Rescale so the largest class keeps approximately its original
+            # count, and everything else scales up relative to it.
             raw = raw / raw.max() * self.counts.max()
 
         if min_count is not None:
@@ -150,177 +234,59 @@ class ClassDistributionPlanner:
         if max_count is not None:
             raw = torch.clamp(raw, max=max_count)
 
-        targets = {name: int(round(v)) for name, v in zip(self.class_names, raw.tolist())}
-        self._targets = targets
-        return targets
+        targets = {
+            name: int(round(v))
+            for name, v in zip(self.class_names, raw.tolist())
+        }
 
-    def loss_weights(self, use_target_counts=False, method='effective'):
+        current_counts = {}
+        n_copies = {}
+        projected_counts = {}
+
+        for name, count in zip(self.class_names, self.counts.tolist()):
+            count = int(count)
+            target = targets[name]
+            current_counts[name] = count
+
+            if count <= 0:
+                n_copies[name] = 0
+                projected_counts[name] = 0
+                continue
+
+            ratio = target / count
+            copies = max(0, round(ratio) - 1)
+            n_copies[name] = copies
+            projected_counts[name] = count * (copies + 1)
+
+        return {
+            'current_counts': current_counts,
+            'n_copies': n_copies,
+            'projected_counts': projected_counts,
+        }
+
+    def loss_weights(self, counts=None, method='effective'):
         """
-        Loss weights matching either the raw counts or the planned target
-        counts (call target_counts() first if use_target_counts=True).
+        Computes loss weights for a given class distribution.
+
+        By default, weights are computed from the raw class counts. If
+        augmentation has been planned, pass the plan's projected_counts
+        so the weights reflect the distribution that will actually exist
+        after augmentation.
 
         Args:
-            use_target_counts: if True, computes weights from the distribution
-                you planned with target_counts() instead of the raw counts -
-                use this when your augmentation will actually reach those
-                target counts, so the loss doesn't double-correct on top of
-                augmentation that already balanced things.
+            counts: optional dict {class_name: count}. If None, the raw
+                class counts are used. For post-augmentation weighting,
+                pass augmentation_plan()['projected_counts'].
             method: 'inverse' or 'effective' - see compute_class_weights()
 
         Returns:
             torch.Tensor of shape (num_classes,), in self.class_names order
         """
-        if use_target_counts:
-            if self._targets is None:
-                raise ValueError("Call target_counts() before loss_weights(use_target_counts=True).")
-            counts = torch.tensor([self._targets[c] for c in self.class_names], dtype=torch.float32)
-        else:
+        if counts is None:
             counts = self.counts
-
-        return compute_class_weights(counts, method=method)
-
-
-def suggest_n_copies(
-    data_yaml,
-    class_names=None,
-    dataset_type='segmentation',
-    close_ratio_threshold=3.0,
-    dampen_power=0.5,
-    max_copies=10,
-):
-    """
-    Suggests how many augmented copies to generate per class from raw counts -
-    WITHOUT fully equalizing every class to the largest one. Fully equalizing
-    via augmentation AND then also applying class weights on top double-
-    corrects the same imbalance, which is what you flagged.
-
-    How it decides:
-      - Classes reasonably close to the largest class (ratio to the largest
-        <= close_ratio_threshold) get fully equalized via augmentation - it's
-        cheap and low-risk to close a small gap this way.
-      - Classes far from it (ratio > close_ratio_threshold, e.g. DF/VASC) get
-        a DAMPENED number of copies instead of the full ratio, capped at
-        max_copies, so a class with very few originals doesn't end up as
-        dozens of near-duplicate images. Whatever gap is left after this is
-        meant to be picked up by loss weights - see `residual_loss_weights`
-        below, which computes weights from the counts AFTER this suggested
-        augmentation (not the raw counts), so the two don't double-correct
-        for the same imbalance.
-
-    Args:
-        data_yaml, class_names, dataset_type: same as before
-        close_ratio_threshold: classes within this many times of the largest
-            class get equalized fully via augmentation (ratio <= threshold)
-        dampen_power: for classes beyond the threshold, the extra distance
-            past the threshold is raised to this power before being turned
-            into copies (0 < dampen_power <= 1). 0.5 = sqrt dampening
-            (moderate); lower = gentler augmentation with more of the
-            remaining gap left for loss weights to handle; 1.0 = no
-            dampening (same as full equalization for every class)
-        max_copies: hard cap on n_copies for any single class, regardless of
-            how rare it is, to avoid excessive duplication of a tiny class
-
-    Returns:
-        counts: {class: raw_count}
-        suggestions: {class: n_copies}              -- same shape as before
-        projected_counts: {class: raw_count * (n_copies + 1)}
-            the counts you'll actually end up with after applying
-            `suggestions` - feed this into residual_loss_weights()
-    """
-    counts = {}
-
-    if dataset_type == 'segmentation':
-        labels_path = data_yaml['train'].replace('images', 'labels')
-        all_files_no_ext = [f.split('.')[0] for f in os.listdir(data_yaml['train'])]
-
-        for fname in all_files_no_ext:
-            label_path = os.path.join(labels_path, fname + '.txt')
-
-            if not os.path.exists(label_path):
-                continue
-
-            with open(label_path, 'r') as f:
-                for line in f.readlines():
-                    cls_id = int(float(line.split()[0]))
-                    counts[cls_id] = counts.get(cls_id, 0) + 1
-
-    elif dataset_type == 'classifier':
-        train_path = data_yaml['train']
-
-        for class_name in os.listdir(train_path):
-            class_path = os.path.join(train_path, class_name)
-
-            if not os.path.isdir(class_path):
-                continue
-
-            counts[class_name] = sum(
-                os.path.isfile(os.path.join(class_path, fname))
-                for fname in os.listdir(class_path)
+        else:
+            counts = torch.tensor(
+                [counts[c] for c in self.class_names], dtype=torch.float32
             )
 
-    else:
-        raise ValueError(
-            f"Invalid dataset_type: {dataset_type}. "
-            f"Use 'segmentation' or 'classifier'."
-        )
-
-    if not counts:
-        print("No classes found.")
-        return {}, {}, {}
-
-    max_count = max(counts.values())
-
-    suggestions = {}
-    projected_counts = {}
-    for cls_id, count in counts.items():
-        if not count:
-            suggestions[cls_id] = 0
-            projected_counts[cls_id] = 0
-            continue
-
-        ratio = max_count / count
-
-        if ratio <= close_ratio_threshold:
-            # close enough to the majority class - fully equalize, it's cheap
-            effective_ratio = ratio
-        else:
-            # far away - dampen the portion of the ratio beyond the threshold,
-            # so rare classes get a meaningful (not absurd) copy count and the
-            # remaining gap is left for loss weights to cover instead
-            effective_ratio = close_ratio_threshold * (ratio / close_ratio_threshold) ** dampen_power
-
-        n_copies = max(0, round(effective_ratio) - 1)
-        n_copies = min(n_copies, max_copies)
-
-        suggestions[cls_id] = n_copies
-        projected_counts[cls_id] = int(count * (n_copies + 1))
-
-    if class_names:
-        counts = {class_names[k]: v for k, v in counts.items()}
-        suggestions = {class_names[k]: v for k, v in suggestions.items()}
-        projected_counts = {class_names[k]: v for k, v in projected_counts.items()}
-
-    return counts, suggestions, projected_counts
-
-
-def residual_loss_weights(projected_counts: dict, method='effective'):
-    """
-    Loss weights computed from POST-augmentation projected counts (the third
-    value returned by suggest_n_copies), so the weighting only corrects for
-    whatever imbalance the suggested augmentation didn't already fix - instead
-    of double-correcting for the full raw imbalance on top of augmentation.
-
-    Args:
-        projected_counts: dict {class_name_or_id: projected_count}, i.e. the
-            `projected_counts` returned by suggest_n_copies()
-        method: 'inverse' or 'effective' - see compute_class_weights()
-
-    Returns:
-        dict {class_name_or_id: weight}, same key order as given. Convert to
-        a tensor in your class-index order before passing to FocalLoss(alpha=...)
-        or nn.CrossEntropyLoss(weight=...).
-    """
-    keys = list(projected_counts.keys())
-    values = [projected_counts[k] for k in keys]
-    weights = compute_class_weights(values, method=method)
-    return dict(zip(keys, weights.tolist()))
+        return compute_class_weights(counts, method=method)
