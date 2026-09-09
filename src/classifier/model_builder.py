@@ -55,9 +55,10 @@ def _set_module_by_path(model: nn.Module, dotted_path: str, new_module: nn.Modul
 
 def show_model_layers(model: nn.Module, max_depth: int = 1, recommend_last_n: int = 2):
     """
-    Prints the model's submodule names, marking which ones are recommended
-    fine-tuning candidates based on generic heuristics (works for any
-    architecture: Swin, ResNet, EfficientNet, ConvNeXt, ViT, ...):
+    Prints the model's submodule names, their trainable parameter counts, and
+    which ones are recommended fine-tuning candidates based on generic
+    heuristics (works for any architecture: Swin, ResNet, EfficientNet,
+    ConvNeXt, ViT, ...):
 
     - The classification head (fc / head / classifier / heads) is always
       recommended, since it's task-specific and untrained for your data.
@@ -79,16 +80,22 @@ def show_model_layers(model: nn.Module, max_depth: int = 1, recommend_last_n: in
         recommended: list of layer name strings, ready to pass into
                      `unfreeze_layers`
     """
-    entries = []  # dicts: name, has_params, is_leaf
+    entries = []  # dicts: name, has_params, is_leaf, trainable_count, total_count
 
     def _walk(module, prefix="", depth=0):
         for name, child in module.named_children():
             full_name = f"{prefix}.{name}" if prefix else name
             has_children = any(True for _ in child.named_children())
             will_expand = has_children and depth < max_depth - 1
-            has_params = any(True for _ in child.parameters(recurse=True))
 
-            entries.append({'name': full_name, 'has_params': has_params, 'is_leaf': not will_expand})
+            total_count = sum(p.numel() for p in child.parameters(recurse=True))
+            trainable_count = sum(p.numel() for p in child.parameters(recurse=True) if p.requires_grad)
+            has_params = total_count > 0
+
+            entries.append({
+                'name': full_name, 'has_params': has_params, 'is_leaf': not will_expand,
+                'trainable_count': trainable_count, 'total_count': total_count,
+            })
 
             if will_expand:
                 _walk(child, full_name, depth + 1)
@@ -108,20 +115,31 @@ def show_model_layers(model: nn.Module, max_depth: int = 1, recommend_last_n: in
 
     print(f"Layer names for {model.__class__.__name__}:")
     print("(* = recommended to unfreeze)\n")
+    print(f"{'Layer':<25}{'Trainable / Total Params':<30}{'Status'}")
+    print("-" * 80)
 
     for e in entries:
         if not e['is_leaf']:
             tag = "(expanded below)"
+            param_str = ""
         elif not e['has_params']:
             tag = "(no trainable parameters)"
-        elif e['name'] in head_names:
-            tag = "* recommended (classifier head)"
-        elif e['name'] in recommended_backbone:
-            tag = "* recommended (late backbone block)"
+            param_str = "-"
         else:
-            tag = "usually kept frozen"
+            param_str = f"{e['trainable_count']:,} / {e['total_count']:,}"
+            if e['name'] in head_names:
+                tag = "* recommended (classifier head)"
+            elif e['name'] in recommended_backbone:
+                tag = "* recommended (late backbone block)"
+            else:
+                tag = "usually kept frozen"
 
-        print(f"{e['name']:<25}{tag}")
+        print(f"{e['name']:<25}{param_str:<30}{tag}")
+
+    total_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    print("-" * 80)
+    print(f"Total Trainable: {total_trainable:,} / {total_params:,} ({total_trainable / total_params:.2%})")
 
     print(f"\nSuggested: unfreeze_layers(model, {recommended})")
 
@@ -208,7 +226,12 @@ def build_model(
         for name, param in model.named_parameters():
             if any(layer_name in name for layer_name in unfreeze_layers):
                 param.requires_grad = True
+
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
         print(f"Selective Unfreeze Enabled: {unfreeze_layers}")
+        print(f"Trainable Parameters: {trainable_params:,} / {total_params:,} ({trainable_params / total_params:.2%})")
 
     # ---- optimizer ----
     opt_type = optimizer_type.strip().lower()
