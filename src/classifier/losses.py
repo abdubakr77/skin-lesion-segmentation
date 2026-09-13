@@ -59,6 +59,48 @@ class FocalLoss(nn.Module):
             return loss.sum()
         return loss
 
+
+class ClassBalancedLoss(nn.Module):
+    """
+    Class-Balanced Loss (Cui et al., CVPR 2019). Reweights each class by its
+    "effective number of samples" (1 - beta^n)/(1 - beta) instead of raw
+    inverse frequency - tends to be more stable than plain inverse-frequency
+    weighting for severe imbalance like DF/VASC vs NV.
+
+    Args:
+        samples_per_class: sample counts per class, in class-index order
+        beta: reweighting hyperparameter, typically 0.9-0.9999.
+              Higher beta -> more aggressive boost for rare classes.
+        loss_type: 'focal' or 'ce' - the base loss the class-balanced weights
+                   get applied to.
+        gamma: focal loss gamma, only used when loss_type='focal'.
+    """
+
+    def __init__(self, samples_per_class, beta=0.999, loss_type='focal', gamma=2.0):
+        super().__init__()
+        samples_per_class = torch.as_tensor(samples_per_class, dtype=torch.float32)
+        effective_num = 1.0 - torch.pow(torch.tensor(beta), samples_per_class)
+        weights = (1.0 - beta) / effective_num
+        self.weights = weights / weights.sum() * len(samples_per_class)
+        self.loss_type = loss_type
+        self.gamma = gamma
+
+    def forward(self, inputs, targets):
+        weights = self.weights.to(inputs.device)
+
+        if self.loss_type == 'focal':
+            return FocalLoss(alpha=weights, gamma=self.gamma)(inputs, targets)
+
+        if self.loss_type == 'ce':
+            if targets.ndim > 1:
+                log_probs = F.log_softmax(inputs, dim=1)
+                per_sample_w = (targets * weights).sum(dim=1)
+                return (-(targets * log_probs).sum(dim=1) * per_sample_w).mean()
+            return F.cross_entropy(inputs, targets, weight=weights)
+
+        raise ValueError(f"Unsupported loss_type='{self.loss_type}', use 'focal' or 'ce'")
+
+
 class LDAMLoss(nn.Module):
     """
     Label-Distribution-Aware Margin Loss (Cao et al., NeurIPS 2019).
