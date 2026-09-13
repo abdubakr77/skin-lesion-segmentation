@@ -58,3 +58,46 @@ class FocalLoss(nn.Module):
         if self.reduction == 'sum':
             return loss.sum()
         return loss
+
+class LDAMLoss(nn.Module):
+    """
+    Label-Distribution-Aware Margin Loss (Cao et al., NeurIPS 2019).
+    Instead of reweighting the loss, it enforces a LARGER decision margin for
+    rare classes so the model is pushed to separate them more confidently.
+    A good complement to reweighting for long-tailed data - some papers pair
+    it with class weights applied only in later epochs ("deferred
+    re-weighting"), but it works fine as a standalone loss too.
+
+    Note: margins are defined per hard class label, so if you use this with
+    CutMix/MixUp, soft targets are collapsed to their argmax first (a minor
+    approximation - the two techniques don't combine perfectly).
+
+    Args:
+        samples_per_class: sample counts per class, in class-index order
+        max_m: maximum margin (typical: 0.5)
+        weight: optional per-class weight tensor (e.g. from compute_class_weights)
+        s: logit scaling factor (typical: 30)
+    """
+
+    def __init__(self, samples_per_class, max_m=0.5, weight=None, s=30):
+        super().__init__()
+        samples_per_class = torch.as_tensor(samples_per_class, dtype=torch.float32)
+        m_list = 1.0 / torch.sqrt(torch.sqrt(samples_per_class))
+        self.m_list = m_list * (max_m / m_list.max())
+        self.weight = weight
+        self.s = s
+
+    def forward(self, inputs, targets):
+        if targets.ndim > 1:
+            targets = targets.argmax(dim=1)
+
+        m_list = self.m_list.to(inputs.device)
+        index = torch.zeros_like(inputs, dtype=torch.bool)
+        index.scatter_(1, targets.view(-1, 1), True)
+
+        batch_m = m_list[targets].view(-1, 1)
+        x_m = inputs - batch_m
+        logits = torch.where(index, x_m, inputs) * self.s
+
+        weight = self.weight.to(inputs.device) if self.weight is not None else None
+        return F.cross_entropy(logits, targets, weight=weight)
