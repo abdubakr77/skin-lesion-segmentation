@@ -8,6 +8,8 @@ from src.data.dataset import clear_dataset_images
 from scipy.interpolate import splprep, splev
 from skimage.morphology import skeletonize
 
+SEED = 42
+np.random.seed(SEED)
 
 HAIR_COLORS = [(20, 15, 10), (40, 25, 15), (60, 50, 45), (10, 10, 10)]
 
@@ -144,7 +146,7 @@ def build_transform(config):
         ),
         
         A.Lambda(image=lambda img, **kwargs: add_hair_overlay(img, hair_curves=hair_curves, p=config['hair_p']), p=1.0),
-    ], keypoint_params=A.KeypointParams(format='xy', remove_invisible=False))
+    ], keypoint_params=A.KeypointParams(format='xy', remove_invisible=False), seed=SEED)
 
 
 def augment_and_save(image, polygons, class_labels, n_copies, base_filename,
