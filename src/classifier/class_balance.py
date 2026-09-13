@@ -162,6 +162,8 @@ class ClassDistributionPlanner:
         for name, count in zip(self.class_names, self.counts.tolist()):
             print(f"  {name:>8}: {int(count):>6}")
 
+        return 'Summary Showed Successfuly'
+
     def augmentation_plan(self, strategy='sqrt', min_count=None, max_count=None):
         """
         Builds an augmentation plan from the current class distribution.
