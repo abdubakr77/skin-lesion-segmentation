@@ -1,16 +1,16 @@
 task: semantic
 mode: train
 model: yolo26n-sem.pt
-data: ../data/processed/Stage-1/data.yaml
-epochs: 100
+data: /kaggle/working/Stage-1/data.yaml
+epochs: 35
 time: null
-patience: 7
+patience: 5
 batch: 128
-imgsz: 256
+imgsz: 544
 save: true
 save_period: -1
 cache: false
-device: '0'
+device: 0,1
 workers: 4
 project: logs
 name: stage-1
@@ -19,7 +19,7 @@ pretrained: true
 cls_remap: true
 optimizer: AdamW
 verbose: true
-seed: 0
+seed: 42
 deterministic: true
 single_cls: false
 rect: false
@@ -45,7 +45,7 @@ max_det: 300
 quantize: null
 dnn: false
 plots: true
-end2end: null
+nms: null
 source: null
 vid_stride: 1
 stream_buffer: false
@@ -71,7 +71,6 @@ dynamic: false
 simplify: true
 opset: null
 workspace: null
-nms: false
 lr0: 0.001
 lrf: 0.01
 momentum: 0.937
@@ -93,11 +92,11 @@ dlog: 1.0
 dgrad: 0.5
 dlam: 1.0
 nbs: 64
-hsv_h: 0.015
+hsv_h: 0.02
 hsv_s: 0.0
 hsv_v: 0.0
-degrees: 10.0
-translate: 0.05
+degrees: 5.0
+translate: 0.1
 scale: 0.1
 shear: 0.0
 perspective: 0.0
@@ -109,8 +108,8 @@ mixup: 0.0
 cutmix: 0.0
 copy_paste: 0.0
 copy_paste_mode: flip
-auto_augment: None
+auto_augment: null
 erasing: 0.0
 cfg: null
 tracker: tracktrack.yaml
-save_dir: C:\Users\ibrah.HIMA\OneDrive\Desktop\Full AI\Projects\GitHub - Kaggle Projects\skin-lesion-segmentation\outputs\logs\stage-1
+save_dir: /kaggle/working/logs/stage-1

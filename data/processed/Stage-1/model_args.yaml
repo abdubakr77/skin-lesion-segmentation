@@ -2,8 +2,8 @@
 epochs: 35
 save: True
 imgsz: 516
-batch: 128
-patience: 7
+batch: 16
+patience: 5
 optimizer: AdamW
 lr0: 0.0005
 lrf: 0.01
