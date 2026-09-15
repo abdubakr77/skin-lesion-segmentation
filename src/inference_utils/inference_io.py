@@ -1,31 +1,29 @@
-# Path validation, ground-truth loading (from raw masks OR YOLO-seg label
-# files), mask sanity checks, and a reusable crop helper for the inference
-# pipeline. Polygon-validity fixing (contour repair) already happens once at
-# dataset-build time in polygon_preprocessing.py, so it isn't repeated here -
-# this file only checks the label .txt files themselves are well-formed.
+# Path validation, image reading (jpg/png fallback), ground-truth loading
+# (auto-detects masks vs YOLO-seg label files from a single path), true-label
+# lookup from a dataframe, mask sanity checks, and a reusable crop helper.
+#
+# Design note on "checking polygon conversion happened correctly": the
+# shapely-based contour repair (fixing self-intersecting shapes, recovering
+# MultiPolygons, etc.) already happens ONCE, at dataset-build time, when raw
+# masks are first converted into polygon label files. By the time inference
+# runs, we're reading already-exported label .txt files, not raw contours -
+# so what's actually worth re-checking here is the FILE itself: does each
+# line have a valid class id, a complete set of (x, y) pairs, and coordinates
+# within [0, 1]? That's what validate_labels_folder does.
 
 import os
+import re
 import cv2
 import numpy as np
 
 
-def check_paths(images_path, masks_path=None, labels_path=None,
-                 stage1_weights=None, stage2_weights=None):
-    """Validates that all provided paths actually exist before doing any work."""
+def check_paths(images_path, ground_truth_path=None):
+    """Validates that the given paths exist before doing any work."""
     if not os.path.exists(images_path):
         raise FileNotFoundError(f"Images path not found: {images_path}")
 
-    if masks_path is not None and not os.path.exists(masks_path):
-        raise FileNotFoundError(f"Masks path not found: {masks_path}")
-
-    if labels_path is not None and not os.path.exists(labels_path):
-        raise FileNotFoundError(f"Labels path not found: {labels_path}")
-
-    if stage1_weights is not None and not os.path.exists(stage1_weights):
-        raise FileNotFoundError(f"Stage 1 weights not found: {stage1_weights}")
-
-    if stage2_weights is not None and not os.path.exists(stage2_weights):
-        raise FileNotFoundError(f"Stage 2 weights not found: {stage2_weights}")
+    if ground_truth_path is not None and not os.path.exists(ground_truth_path):
+        raise FileNotFoundError(f"Ground truth path not found: {ground_truth_path}")
 
 
 def get_background_class_id(names):
@@ -36,11 +34,41 @@ def get_background_class_id(names):
     raise ValueError("No class named 'background' found in model.names")
 
 
+def find_image_file(images_path, image_id):
+    """Returns the full path to an image trying .jpg / .jpeg / .png in turn,
+    or None if none of them exist. Used both by read_image() and anywhere
+    the pipeline needs to copy the original file (no-detection / low-
+    confidence folders) without hardcoding one extension.
+    """
+    for ext in ('.jpg', '.jpeg', '.png'):
+        path = os.path.join(images_path, image_id + ext)
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def read_image(images_path, image_id):
+    """Reads an image trying .jpg / .jpeg / .png in turn, since the dataset
+    isn't guaranteed to use one fixed extension. Returns an RGB numpy array.
+    Raises FileNotFoundError only if none of the extensions worked.
+    """
+    path = find_image_file(images_path, image_id)
+    if path is not None:
+        try:
+            img = cv2.imread(path)
+            if img is not None:
+                return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        except Exception:
+            pass
+
+    raise FileNotFoundError(
+        f"Could not read '{image_id}' as .jpg/.jpeg/.png from {images_path}"
+    )
+
+
 def validate_labels_folder(labels_path, image_ids=None, sample_size=None):
     """Structural sanity check on YOLO-seg label .txt files: correct value
-    count, complete (x, y) pairs, coordinates within [0, 1]. This is separate
-    from the shapely-based contour repair done when the labels were first
-    generated - this just catches file-level mistakes before inference runs.
+    count, complete (x, y) pairs, coordinates within [0, 1].
 
     Returns a list of warning strings (empty if everything looks fine).
     """
@@ -97,53 +125,83 @@ def _labels_txt_to_mask(label_path, img_h, img_w):
     return mask
 
 
-def load_ground_truth(image_id, img_h, img_w, masks_path=None, labels_path=None):
-    """Loads ground truth from whichever source is available.
+def load_ground_truth(image_id, img_h, img_w, ground_truth_path):
+    """Loads ground truth from ONE path, auto-detecting whether it holds raw
+    mask images or YOLO-seg label .txt files - no separate parameter needed
+    for each case.
 
-    - masks_path: raw ISIC-style binary *_segmentation.png (0/1, no disease
-      breakdown - just "is this pixel part of the lesion or not")
-    - labels_path: YOLO-seg .txt files (real class ids per polygon) -
-      rasterized to a per-pixel class-id mask, background = -1
+    Detection order: look for a mask file first (any image extension,
+    matched by exact prefix so "ISIC_0001" doesn't accidentally match
+    "ISIC_00012_x.png"). If nothing matches, fall back to a same-named .txt
+    label file. If neither exists, there's simply no ground truth for this
+    image - not treated as an error.
 
-    Returns (mask, kind) where kind is 'binary', 'multiclass', or None if no
-    ground truth was found for this image.
+    Returns (mask, kind):
+        kind is 'binary' (0/1, no class identity - just lesion vs not),
+        'multiclass' (-1=background, real class ids elsewhere from the label
+        file), or None if nothing was found.
     """
-    if masks_path is not None:
-        mask_file = os.path.join(masks_path, f"{image_id}_segmentation.png")
-        if os.path.exists(mask_file):
-            mask = cv2.imread(mask_file, cv2.IMREAD_GRAYSCALE)
-            return (mask > 127).astype(np.uint8), 'binary'
+    if ground_truth_path is None:
         return None, None
 
-    if labels_path is not None:
-        label_file = os.path.join(labels_path, f"{image_id}.txt")
-        if os.path.exists(label_file):
-            return _labels_txt_to_mask(label_file, img_h, img_w), 'multiclass'
-        return None, None
+    mask_matches = [
+        f for f in os.listdir(ground_truth_path)
+        if (f.startswith(image_id + '_') or f.startswith(image_id + '.'))
+        and f.lower().endswith(('.png', '.jpg', '.jpeg'))
+    ]
+    if mask_matches:
+        mask = cv2.imread(os.path.join(ground_truth_path, mask_matches[0]), cv2.IMREAD_GRAYSCALE)
+        if mask is not None:
+            # ground truth may have different original dimensions than the
+            # image actually being processed - resize to match so shapes
+            # never mismatch downstream in compute_overlap_metrics. Nearest
+            # neighbor keeps the mask strictly binary (no blended edge values).
+            if mask.shape[:2] != (img_h, img_w):
+                mask = cv2.resize(mask, (img_w, img_h), interpolation=cv2.INTER_NEAREST)
+            return (mask > 127).astype(np.uint8), 'binary'
+
+    label_file = os.path.join(ground_truth_path, image_id + '.txt')
+    if os.path.exists(label_file):
+        return _labels_txt_to_mask(label_file, img_h, img_w), 'multiclass'
 
     return None, None
 
 
-def check_mask_size(binary_mask, image_id, min_ratio=0.005, max_ratio=0.85):
-    """Flags a lesion mask whose area looks unusually small or large relative
-    to the whole image. Returns a list of warning strings (possibly empty).
+def get_true_label(df, image_id, image_id_column='image_id', dx_column='dx'):
+    """Looks up the ground-truth diagnosis code for an image from a metadata
+    dataframe (e.g. the original dx column: 'mel', 'nv', 'akiec', ...).
+    Returns None if df wasn't given or the image_id isn't found.
+    """
+    if df is None:
+        return None
+
+    matches = df[df[image_id_column] == image_id]
+    if len(matches) == 0:
+        return None
+
+    return str(matches.iloc[0][dx_column])
+
+
+def check_mask_size(binary_mask, image_id, label='mask', min_ratio=0.005, max_ratio=0.85):
+    """Flags a mask whose area looks unusually small or large relative to
+    the whole image. `label` just tags the warning (e.g. 'true mask' vs
+    'predicted mask') so both can be checked and told apart in the log.
     """
     warnings = []
     img_h, img_w = binary_mask.shape[:2]
     area_ratio = binary_mask.sum() / (img_h * img_w)
 
     if area_ratio < min_ratio:
-        warnings.append(f"{image_id}: lesion area unusually SMALL ({area_ratio:.2%} of image)")
+        warnings.append(f"{image_id}: {label} area unusually SMALL ({area_ratio:.2%} of image)")
     elif area_ratio > max_ratio:
-        warnings.append(f"{image_id}: lesion area unusually LARGE ({area_ratio:.2%} of image)")
+        warnings.append(f"{image_id}: {label} area unusually LARGE ({area_ratio:.2%} of image)")
 
     return warnings
 
 
 def crop_from_mask(image, binary_mask, remove_background=False, padding=0):
     """Crops the image to the bounding box of a binary mask. Optionally
-    zeroes out everything outside the mask (background removal). Returns
-    None if the mask is empty.
+    zeroes out everything outside the mask. Returns None if the mask is empty.
     """
     ys, xs = np.where(binary_mask)
     if len(xs) == 0:
@@ -175,3 +233,11 @@ def compute_overlap_metrics(pred_mask, true_mask):
     dice = (2 * intersection) / (pred.sum() + true.sum()) if (pred.sum() + true.sum()) > 0 else 0.0
 
     return {'iou': float(iou), 'dice': float(dice)}
+
+
+def normalize_label(name):
+    """Strips a leading numeric prefix and lowercases, so '05_NV', 'NV', and
+    'nv' all compare equal. Used everywhere a predicted/true label pair needs
+    to be checked for a match.
+    """
+    return re.sub(r'^\d+_', '', str(name)).strip().lower()
