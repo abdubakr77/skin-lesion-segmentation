@@ -1,2 +1,2 @@
-image_id,stage1_detected,stage1_prediction,stage2_detected,stage2_prediction,true_class_name,iou,dice
-ISIC_0032435,True,Not Mel,True,VASC,vasc,0.8933151221238547,0.943651811243936
+image_id,true_dx,stage1_detected,stage1_prediction,true_class_stage1,iou,dice,stage2_prediction,stage2_confidence,final_prediction
+ISIC_0030130,bkl,True,Not Mel,Not Mel,0.6511149611579947,0.7886973063357636,03_BKL,0.7218368649482727,03_BKL
