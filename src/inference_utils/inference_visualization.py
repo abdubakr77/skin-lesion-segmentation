@@ -1,14 +1,50 @@
 # Visualization for the inference pipeline: predicted mask alone, true mask
 # alone, image+predicted overlay, and predicted-vs-true overlay, with
 # consistent per-class colors and an IoU/Dice comparison box.
+#
+# The SAME plotting function is used for both stages - Stage 1 passes its own
+# semantic-model class dict/colors; Stage 2 passes a one-entry "display" dict
+# (Stage 1's retained mask, relabeled with the classified disease name and a
+# color from the fixed disease palette below). Title correctness (green/red)
+# is driven by explicit true_label/pred_label strings the pipeline resolves
+# beforehand - not by comparing mask class ids - so the same logic works
+# whether the truth came from a mask's class id or a metadata dataframe.
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import patches
 
+from src.inference_utils.inference_io import normalize_label
+
+
+DISEASE_COLOR_PALETTE = {
+    'akiec': (0.121, 0.466, 0.705, 1.0),
+    'bcc':   (1.000, 0.498, 0.055, 1.0),
+    'bkl':   (0.173, 0.627, 0.173, 1.0),
+    'df':    (0.839, 0.153, 0.157, 1.0),
+    'nv':    (0.580, 0.404, 0.741, 1.0),
+    'vasc':  (0.549, 0.337, 0.294, 1.0),
+}
+
+
+def get_disease_color(name):
+    """Consistent color per disease class name, matched after stripping any
+    numeric prefix and lowercasing (so '05_NV', 'NV', and 'nv' all resolve to
+    the same color). Falls back to a deterministic tab10 color for any name
+    outside the known palette, so this never breaks on an unexpected class.
+    """
+    key = normalize_label(name)
+    if key in DISEASE_COLOR_PALETTE:
+        return DISEASE_COLOR_PALETTE[key]
+
+    cmap = plt.cm.get_cmap('tab10', 10)
+    return cmap(hash(key) % 10)
+
 
 def get_class_colors(class_names, background_id):
-    """Assigns one consistent color per non-background class name."""
+    """Assigns one consistent color per non-background class id (used for
+    Stage 1's own Mel / Not Mel classes).
+    """
     non_bg = [c for c in class_names if c != background_id]
     cmap = plt.cm.get_cmap('tab10', max(len(non_bg), 1))
     return {cls_id: cmap(i) for i, cls_id in enumerate(non_bg)}
@@ -19,50 +55,34 @@ def _colored_overlay(binary_mask, color, alpha):
     overlay[binary_mask == 1] = (*color[:3], alpha)
     return overlay
 
-def _get_class_match_color(pred_classes, true_classes):
-    """Compares predicted vs true class sets and returns a status color.
-
-    - green: exact match (same set of classes, including both empty = correct
-      "nothing here" case)
-    - yellow: partial match (at least one shared class, but sets differ -
-      covers both "true has 2 classes, model got one right" and "model
-      predicted extra classes but one of them is correct")
-    - red: no overlap at all (completely wrong, or a false positive/negative
-      with zero shared classes)
-    """
-    pred_set = set(pred_classes)
-    true_set = set(true_classes)
-
-    if pred_set == true_set:
-        return '#16a34a'  # green
-    if pred_set & true_set:
-        return '#ca8a04'  # yellow
-    return '#dc2626'  # red
-
 
 def plot_inference_comparison(image, pred_masks, class_names, colors,
                                true_mask=None, gt_kind=None,
+                               true_label=None, pred_label=None,
                                overlap_metrics=None, title='', save_path=None):
-    """4-panel comparison figure.
+    """4-panel comparison figure: predicted mask alone, true mask alone,
+    image + predicted overlay, and predicted + true overlaid together.
 
     Args:
         image: RGB image array
-        pred_masks: dict {cls_id: binary_mask} of predicted classes present
-        class_names: model.names dict (for legend labels, and used to resolve
-                     ground-truth class ids too - assumes GT ids share the
-                     same class-id space as this model, which holds when
-                     comparing a stage's predictions against that same
-                     stage's ground truth)
-        colors: dict {cls_id: color}, from get_class_colors()
+        pred_masks: dict {cls_id: binary_mask} of predicted classes present.
+                    For Stage 2's disease branch this is a one-entry display
+                    dict (e.g. {0: retained_stage1_mask}) built by the
+                    pipeline - this function only cares about shapes here.
+        class_names: dict {cls_id: name} for the panel-3 legend
+        colors: dict {cls_id: color}, matching pred_masks' keys
         true_mask: ground truth mask, or None if unavailable
         gt_kind: 'binary' (0/1, no class info) or 'multiclass' (-1=background,
-                 real class ids elsewhere) - tells us how to read true_mask.
-                 The title color-coding (red/yellow/green) and the "True: ..."
-                 label only apply when gt_kind == 'multiclass', since binary
-                 ground truth carries no class identity to compare against.
+                 real class ids elsewhere) - tells us how to read true_mask
+        true_label / pred_label: plain strings for the title's correctness
+                                  check (e.g. 'Mel'/'Not Mel', or a dx code
+                                  like 'nv'). Compared after normalize_label()
+                                  so prefixes/case never cause a false
+                                  mismatch. If either is None, the title is
+                                  shown plain with no color coding.
         overlap_metrics: optional dict {'iou': ..., 'dice': ...} shown as a
                          comparison box under the figure
-        title: figure title
+        title: figure title (the true/pred label summary is appended to this)
         save_path: if given, saves the figure to this path
     """
     fig, axes = plt.subplots(1, 4, figsize=(24, 6))
@@ -117,17 +137,14 @@ def plot_inference_comparison(image, pred_masks, class_names, colors,
                 axes[3].contour((true_mask == cls_id).astype('uint8'), colors='white', linewidths=1.5)
     axes[3].axis('off')
 
-    # ---- Title, with true-class label and correctness color when possible ----
-    suptitle_color = 'black'
+    # ---- Title: plain, or "True: X | Pred: Y" colored green/red ----
     full_title = title
+    suptitle_color = 'black'
 
-    if true_mask is not None and gt_kind == 'multiclass':
-        true_classes = [int(c) for c in np.unique(true_mask) if c != -1]
-        pred_classes = list(pred_masks.keys())
-
-        true_names = ', '.join(class_names[c] for c in sorted(true_classes)) if true_classes else 'None'
-        full_title = f"{title} | True: {true_names}"
-        suptitle_color = _get_class_match_color(pred_classes, true_classes)
+    if true_label is not None and pred_label is not None:
+        is_correct = normalize_label(true_label) == normalize_label(pred_label)
+        full_title = f"{title} | True: {true_label} | Pred: {pred_label}"
+        suptitle_color = '#16a34a' if is_correct else '#dc2626'
 
     fig.suptitle(full_title, color=suptitle_color, fontweight='bold')
 
